@@ -1,0 +1,22 @@
+# Documentação do C2L Antivirus
+
+Esta pasta concentra a documentação oficial do projeto C2L Antivirus.
+
+## Índice
+
+| Documento | Título | Status |
+|---|---|---|
+| [01 — Visão e Objetivos](01-visao-e-objetivos.md) | Visão, objetivos, plataformas e roadmap inicial | Aprovado |
+| 02 — Requisitos do Sistema | Requisitos funcionais e não funcionais | Planejado |
+| 03 — Arquitetura | Arquitetura técnica e componentes | Planejado |
+| 04 — Threat Model | Modelagem de ameaças e superfícies de ataque | Planejado |
+| 05 — Motor de Detecção | Estratégias de assinatura, heurística e comportamento | Planejado |
+| 06 — Segurança | Princípios e controles de segurança | Planejado |
+| 07 — Testes | Estratégia, laboratório e métricas | Planejado |
+| 08 — Roadmap | Evolução por versões e marcos | Planejado |
+
+## Princípio de documentação
+
+As decisões importantes do projeto devem ser registradas antes ou durante a implementação. Alterações relevantes na arquitetura devem ser documentadas para preservar o histórico técnico do projeto.
+
+A documentação também deverá registrar limitações e decisões que posteriormente forem revistas.
