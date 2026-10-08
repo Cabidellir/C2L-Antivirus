@@ -7,7 +7,7 @@ Esta pasta concentra a documentação oficial do projeto C2L Antivirus.
 | Documento | Título | Status |
 |---|---|---|
 | [01 — Visão e Objetivos](01-visao-e-objetivos.md) | Visão, objetivos, plataformas e roadmap inicial | Aprovado |
-| 02 — Requisitos do Sistema | Requisitos funcionais e não funcionais | Planejado |
+| [02 — Requisitos do Sistema](02-requisitos-do-sistema.md) | Requisitos funcionais, não funcionais, segurança e escopo da V0.1 | Aprovado |
 | 03 — Arquitetura | Arquitetura técnica e componentes | Planejado |
 | 04 — Threat Model | Modelagem de ameaças e superfícies de ataque | Planejado |
 | 05 — Motor de Detecção | Estratégias de assinatura, heurística e comportamento | Planejado |
