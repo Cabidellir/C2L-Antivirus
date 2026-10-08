@@ -13,7 +13,7 @@ Esta pasta concentra a documentação oficial do projeto C2L Antivirus.
 | [05 — Motor de Detecção](05-motor-de-deteccao.md) | Camadas de detecção, evidências, risco, decisão e evolução do motor | Aprovado |
 | [06 — Segurança](06-seguranca.md) | Proteção do próprio C2L, integridade, anti-tamper, atualizações e recuperação | Aprovado |
 | [07 — Testes](07-testes.md) | Estratégia de validação, laboratório, métricas e critérios de release | Aprovado |
-| 08 — Roadmap | Evolução por versões e marcos | Planejado |
+| [08 — Roadmap](08-roadmap.md) | Evolução por versões, fases, gates e prioridades de desenvolvimento | Aprovado |
 
 ## Princípio de documentação
 
