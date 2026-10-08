@@ -11,7 +11,7 @@ Esta pasta concentra a documentação oficial do projeto C2L Antivirus.
 | [03 — Arquitetura](03-arquitetura.md) | Arquitetura técnica, componentes e separação multiplataforma | Aprovado |
 | [04 — Threat Model](04-threat-model.md) | Modelagem de ameaças, benchmark de mercado e defesa contínua | Aprovado |
 | [05 — Motor de Detecção](05-motor-de-deteccao.md) | Camadas de detecção, evidências, risco, decisão e evolução do motor | Aprovado |
-| 06 — Segurança | Princípios e controles de segurança | Planejado |
+| [06 — Segurança](06-seguranca.md) | Proteção do próprio C2L, integridade, anti-tamper, atualizações e recuperação | Aprovado |
 | 07 — Testes | Estratégia, laboratório e métricas | Planejado |
 | 08 — Roadmap | Evolução por versões e marcos | Planejado |
 
