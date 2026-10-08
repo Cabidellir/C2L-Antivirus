@@ -14,6 +14,7 @@ Esta pasta concentra a documentação oficial do projeto C2L Antivirus.
 | [06 — Segurança](06-seguranca.md) | Proteção do próprio C2L, integridade, anti-tamper, atualizações e recuperação | Aprovado |
 | [07 — Testes](07-testes.md) | Estratégia de validação, laboratório, métricas e critérios de release | Aprovado |
 | [08 — Roadmap](08-roadmap.md) | Evolução por versões, fases, gates e prioridades de desenvolvimento | Aprovado |
+| [09 — Decisões Técnicas](09-decisoes-tecnicas.md) | Linguagem, stack, estrutura, armazenamento e fundação da V0.1 | Aprovado |
 
 ## Princípio de documentação
 
