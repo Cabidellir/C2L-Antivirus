@@ -102,4 +102,3 @@ inspeção manual de pixels, foco e diálogos nativos.
 
 Consultar [arquitetura e marcos de segurança](../../docs/WINDOWS-SECURITY-ROADMAP.md)
 para assinaturas autenticadas, serviço Windows, quarentena, EICAR e distribuição.
-
