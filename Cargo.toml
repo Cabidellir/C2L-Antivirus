@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/c2l-core",
+    "crates/c2l-scanner",
+    "crates/c2l-hashing",
+    "crates/c2l-indicators",
+    "crates/c2l-detection",
+    "crates/c2l-risk",
+    "crates/c2l-quarantine",
+    "crates/c2l-events",
+    "crates/c2l-reporting",
+    "crates/c2l-platform",
+    "crates/c2l-platform-windows",
+    "crates/c2l-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["C2L Antivirus contributors"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
