@@ -351,13 +351,12 @@ impl DesktopApp {
                     .map_or("Nenhuma base carregada", |p| p.to_str().unwrap_or("Nome não representável")),
             );
 
-            if ui.button("Escolher CSV…").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
+            if ui.button("Escolher CSV…").clicked()
+                && let Some(path) = rfd::FileDialog::new()
                     .add_filter("Indicadores", &["csv", "txt"])
                     .pick_file()
-                {
-                    self.indicator_file = Some(path);
-                }
+            {
+                self.indicator_file = Some(path);
             }
             if self.indicator_file.is_some() && ui.button("Remover").clicked() {
                 self.indicator_file = None;
