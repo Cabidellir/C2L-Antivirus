@@ -1,4 +1,4 @@
-# Avaliação do projeto após o desktop 0.2.0
+# Avaliação do projeto após o desktop 0.2.1
 
 Estado: protótipo funcional de scanner manual, em fase de engenharia e testes.
 Não existe ainda evidência para o apresentar como proteção antivírus de produção.
@@ -10,7 +10,7 @@ percentagem arbitrária de conclusão ou em resultados de eficácia não medidos
 | Interface Windows | Rust/egui, temas, seleção, progresso por contagem, cancelamento, páginas e histórico local | Testes manuais de DPI/acessibilidade e usabilidade continuada |
 | Scanner | SHA-256, árvore de pastas, erros individuais; desktop até 50 000 entradas | Registos ainda em memória; falta processamento por lotes para volumes inteiros, cache e orçamento de tempo/I/O |
 | Deteção | Correspondência exata com CSV local | Não autentica indicadores; não identifica variantes por conteúdo/comportamento; sem eficácia medida |
-| Diagnóstico | JSON local, cancelamento/cobertura parcial, mensagens dos erros | Códigos estruturados de causa, comparação entre execuções e auditoria autenticada |
+| Diagnóstico | JSON local, cobertura parcial, mensagens, categorias e códigos de erro | Comparação entre execuções e auditoria autenticada |
 | Segurança Windows | GUI sem elevação, sem remediação | Adaptador Windows, serviço e eventos são estruturas ainda sem implementação |
 | Quarentena/risco | Crates previstos | Não implementados; falta recuperação e validação contra perda de dados |
 | Android | Núcleo partilhado e JNI; testes no host | Testes em dispositivo, restrições da plataforma e ciclo de distribuição |
@@ -23,10 +23,11 @@ percentagem arbitrária de conclusão ou em resultados de eficácia não medidos
    cache invalidável e orçamentos de recursos. Confirmar estabilidade de identidade
    e conteúdo durante leitura. Medir CPU/RAM/throughput e latência de cancelamento
    em corpora definidos antes de disponibilizar análise sem limite de contagem.
-2. **Fechar o ciclo dos erros reais.** Repetir o teste que mostrou 9 erros com
-   histórico ativo. Classificar causas por código do sistema, conservar exemplos
-   reproduzíveis e acrescentar regressões. A captura antiga conserva apenas o
-   resumo. Não silenciar erros nem ampliar permissões para melhorar os números.
+2. **Fechar o ciclo dos erros reais.** Quatro relatórios já revistos, incluindo
+   991/9 e 49 983/17; os erros observados são acesso negado e ficheiros em uso.
+   Causas estruturadas e regressão de partilha Windows implementadas na 0.2.1.
+   Falta comparação entre execuções com cobertura equivalente. Não silenciar
+   erros nem ampliar permissões para melhorar os números.
 3. **Base de deteção confiável.** Definir proveniência/licenciamento, assinar
    manifestos/pacotes, rejeitar corrupção/replay/downgrade, preservar última base
    válida e testar revogação. Mostrar versão e idade da base na GUI.
@@ -45,3 +46,12 @@ Os critérios técnicos detalhados estão em [WINDOWS-SECURITY-ROADMAP.md](WINDO
 O histórico é evidência para correções controladas e testadas; ainda não existe
 um mecanismo de autoajuste de segurança. Os próximos marcos devem ser aceites
 pelos testes e medições, não apenas por novas opções na interface.
+
+
+Entrega 0.2.1: API de emissão individual no núcleo e GUI consumidora, sem o vetor
+intermédio de resultados do scanner. O histórico ainda acumula registos na RAM.
+Verifica tamanho e data de modificação no mesmo identificador aberto antes/depois
+do hash e descarta resultados quando deteta alterações. Esta verificação é de
+melhor esforço: não é uma fotografia atómica, nem deteta todas as reescritas do
+mesmo tamanho com metadados preservados. Retoma, cache e identidade robusta
+continuam pendentes.

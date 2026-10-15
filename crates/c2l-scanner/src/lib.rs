@@ -16,7 +16,7 @@ pub struct ScanResult {
 #[derive(Debug)]
 pub enum FileOutcome {
     Scanned(ScanResult),
-    Failed { path: PathBuf, message: String },
+    Failed { path: PathBuf, error: io::Error },
 }
 
 #[derive(Debug)]
@@ -56,13 +56,31 @@ pub fn scan_file_cancellable(
             "The specified path is not a regular file",
         ));
     }
-    let sha256 = c2l_hashing::sha256_reader_cancellable(file, || cancel.load(Ordering::Relaxed))?;
+    let sha256 = c2l_hashing::sha256_reader_cancellable(&file, || cancel.load(Ordering::Relaxed))?;
+    verify_snapshot(&metadata, &file.metadata()?)?;
     Ok(ScanResult {
         path: path.to_path_buf(),
         size_bytes: metadata.len(),
         sha256,
     })
 }
+
+/// Best-effort mutation detection on the same opened file, not an atomic snapshot.
+fn verify_snapshot(before: &fs::Metadata, after: &fs::Metadata) -> io::Result<()> {
+    if before.len() != after.len() || before.modified()? != after.modified()? {
+        return Err(io::Error::other(FileChanged));
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+pub struct FileChanged;
+impl std::fmt::Display for FileChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("File changed during scanning; fingerprint discarded")
+    }
+}
+impl std::error::Error for FileChanged {}
 
 /// Compatibility API for CLI callers. Individual failures remain in the report.
 pub fn scan_directory(path: impl AsRef<Path>, max_files: usize) -> io::Result<DirectoryScan> {
@@ -78,17 +96,42 @@ pub fn scan_directory_controlled(
     cancel: &AtomicBool,
     mut progress: impl FnMut(usize),
 ) -> io::Result<DirectoryScan> {
+    let mut outcomes = Vec::new();
+    let summary = scan_directory_streaming(path, max_files, cancel, |outcome| {
+        outcomes.push(outcome);
+        progress(outcomes.len());
+        Ok(())
+    })?;
+    Ok(DirectoryScan {
+        outcomes,
+        truncated: summary.truncated,
+        cancelled: summary.cancelled,
+    })
+}
+
+#[derive(Debug, Default)]
+pub struct DirectorySummary {
+    pub processed: usize,
+    pub truncated: bool,
+    pub cancelled: bool,
+}
+
+/// Emits one outcome at a time without retaining results. A sink error stops traversal
+/// immediately and is propagated; callers must preserve already written partial results.
+/// The caller owns storage, progress reporting and any resource budget.
+pub fn scan_directory_streaming(
+    path: impl AsRef<Path>,
+    max_files: usize,
+    cancel: &AtomicBool,
+    mut emit: impl FnMut(FileOutcome) -> io::Result<()>,
+) -> io::Result<DirectorySummary> {
     if max_files == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "max_files must be greater than zero",
         ));
     }
-    let mut report = DirectoryScan {
-        outcomes: Vec::new(),
-        truncated: false,
-        cancelled: false,
-    };
+    let mut report = DirectorySummary::default();
     if cancel.load(Ordering::Relaxed) {
         report.cancelled = true;
         return Ok(report);
@@ -113,14 +156,14 @@ pub fn scan_directory_controlled(
                 match entry.file_type() {
                     Ok(kind) if kind.is_symlink() => continue,
                     Ok(kind) if kind.is_dir() => {
-                        if report.outcomes.len() >= max_files {
+                        if report.processed >= max_files {
                             report.truncated = true;
                             break;
                         }
                         if stack.len() >= 256 {
                             FileOutcome::Failed {
                                 path,
-                                message: "Directory depth limit (256) reached".into(),
+                                error: io::Error::other("Directory depth limit (256) reached"),
                             }
                         } else {
                             match fs::read_dir(&path) {
@@ -128,15 +171,12 @@ pub fn scan_directory_controlled(
                                     stack.push((path, entries));
                                     continue;
                                 }
-                                Err(error) => FileOutcome::Failed {
-                                    path,
-                                    message: error.to_string(),
-                                },
+                                Err(error) => FileOutcome::Failed { path, error },
                             }
                         }
                     }
                     Ok(kind) if kind.is_file() => {
-                        if report.outcomes.len() >= max_files {
+                        if report.processed >= max_files {
                             report.truncated = true;
                             break;
                         }
@@ -146,30 +186,24 @@ pub fn scan_directory_controlled(
                                 report.cancelled = true;
                                 break;
                             }
-                            Err(error) => FileOutcome::Failed {
-                                path,
-                                message: error.to_string(),
-                            },
+                            Err(error) => FileOutcome::Failed { path, error },
                         }
                     }
                     Ok(_) => continue,
-                    Err(error) => FileOutcome::Failed {
-                        path,
-                        message: error.to_string(),
-                    },
+                    Err(error) => FileOutcome::Failed { path, error },
                 }
             }
             Err(error) => FileOutcome::Failed {
                 path: parent,
-                message: error.to_string(),
+                error,
             },
         };
-        if report.outcomes.len() >= max_files {
+        if report.processed >= max_files {
             report.truncated = true;
             break;
         }
-        report.outcomes.push(outcome);
-        progress(report.outcomes.len());
+        emit(outcome)?;
+        report.processed += 1;
     }
     Ok(report)
 }
@@ -226,6 +260,54 @@ mod tests {
         let resolved = fs::canonicalize(&root).unwrap();
         assert_eq!(resolved.parent(), Some(temp.as_path()));
         fs::remove_dir_all(resolved).unwrap();
+    }
+
+    #[test]
+    fn streaming_propagates_storage_failure() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut emitted = 0;
+        let error = scan_directory_streaming(root, 100, &AtomicBool::new(false), |_| {
+            emitted += 1;
+            Err(io::Error::other("storage failed"))
+        })
+        .unwrap_err();
+        assert_eq!(emitted, 1);
+        assert_eq!(error.to_string(), "storage failed");
+    }
+
+    #[test]
+    fn detects_file_changes_and_preserves_windows_sharing_error() {
+        let path = std::env::temp_dir().join(format!(
+            "c2l-mutation-{}-{}.tmp",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let before = file.metadata().unwrap();
+        file.set_len(10).unwrap();
+        let error = verify_snapshot(&before, &file.metadata().unwrap()).unwrap_err();
+        assert!(error.get_ref().unwrap().is::<FileChanged>());
+        assert!(verify_snapshot(&file.metadata().unwrap(), &file.metadata().unwrap()).is_ok());
+        drop(file);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            let locked = fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(&path)
+                .unwrap();
+            assert_eq!(scan_file(&path).unwrap_err().raw_os_error(), Some(32));
+            drop(locked);
+        }
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

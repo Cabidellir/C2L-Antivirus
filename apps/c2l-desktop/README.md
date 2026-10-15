@@ -154,3 +154,21 @@ Validação: teste com 1 505 ficheiros de 3 bytes, limite de 1 000, limite exato
 cancelamento após três entradas e cancelamento durante hashing. Histórico com
 50 000 registos sintéticos gravado/reaberto; paginação validada no egui. Isso
 não constitui benchmark de 50 000 ficheiros reais nem de um disco inteiro.
+
+
+### Atualização 0.2.1 — diagnóstico após testes reais
+
+Nos novos resultados, o resumo agrupa erros por causa e cada registo mostra
+orientação e código do sistema quando disponível. Analisar um ficheiro individual
+inacessível também produz um registo persistido. Relatórios antigos mantêm a
+mensagem original, com classificação indicada como indisponível.
+
+Para validar: abra a 0.2.1, analise uma pasta habitual e consulte Resultados →
+erros; feche e reabra para confirmar o diagnóstico persistido. Compare apenas
+análises do mesmo alvo e com o mesmo limite. Nenhum erro cria exclusões ou concede
+privilégios. Os relatórios anteriores ficam preservados no perfil local.
+
+O hash é descartado se tamanho/data de modificação mudarem durante a leitura.
+Isto não garante uma fotografia atómica de ficheiros ativos. A entrega individual
+de resultados prepara a gravação por lotes; a GUI ainda acumula resultados e o
+limite continua em 50 000 entradas. Proteção em tempo real continua indisponível.

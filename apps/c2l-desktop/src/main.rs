@@ -5,7 +5,7 @@
 
 use c2l_detection::{Verdict, classify};
 use c2l_indicators::IndicatorDb;
-use c2l_scanner::{FileOutcome, ScanResult, scan_directory_controlled, scan_file_cancellable};
+use c2l_scanner::{FileOutcome, ScanResult, scan_directory_streaming, scan_file_cancellable};
 use eframe::egui::{self, Color32, RichText};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -19,6 +19,7 @@ use std::time::Duration;
 const MAX_SCAN_FILES: usize = 50_000;
 const DEFAULT_SCAN_FILES: usize = 10_000;
 const RESULT_PAGE_SIZE: usize = 100;
+mod diagnostics;
 mod history;
 mod theme;
 use serde::{Deserialize, Serialize};
@@ -47,6 +48,8 @@ struct Record {
     verdict: String,
     matched: bool,
     error: bool,
+    #[serde(default)]
+    diagnostic: Option<diagnostics::Diagnostic>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -79,6 +82,7 @@ fn make_record(result: ScanResult, indicators: Option<&IndicatorDb>) -> Record {
         verdict,
         matched,
         error: false,
+        diagnostic: None,
     }
 }
 
@@ -90,7 +94,15 @@ fn error_record(path: PathBuf, message: String) -> Record {
         verdict: format!("Erro de leitura: {message}"),
         matched: false,
         error: true,
+        diagnostic: None,
     }
+}
+
+fn io_error_record(path: PathBuf, error: std::io::Error) -> Record {
+    let diagnostic = diagnostics::Diagnostic::from_error(&error);
+    let mut record = error_record(path, error.to_string());
+    record.diagnostic = Some(diagnostic);
+    record
 }
 
 fn summarize(records: Vec<Record>, truncated: bool) -> ScanBatch {
@@ -137,21 +149,22 @@ fn execute_scan(
                 cancelled: true,
                 ..Default::default()
             }),
-            Err(error) => Err(format!("Não foi possível analisar o ficheiro: {error}")),
+            Err(error) => {
+                processed.store(1, Ordering::Relaxed);
+                Ok(summarize(vec![io_error_record(path, error)], false))
+            }
         },
         ScanMode::Folder => {
-            let directory = scan_directory_controlled(&path, max_files, cancel, |count| {
-                processed.store(count, Ordering::Relaxed);
+            let mut records = Vec::new();
+            let directory = scan_directory_streaming(&path, max_files, cancel, |outcome| {
+                records.push(match outcome {
+                    FileOutcome::Scanned(result) => make_record(result, db.as_ref()),
+                    FileOutcome::Failed { path, error } => io_error_record(path, error),
+                });
+                processed.store(records.len(), Ordering::Relaxed);
+                Ok(())
             })
             .map_err(|error| format!("Não foi possível analisar a pasta: {error}"))?;
-            let records = directory
-                .outcomes
-                .into_iter()
-                .map(|outcome| match outcome {
-                    FileOutcome::Scanned(result) => make_record(result, db.as_ref()),
-                    FileOutcome::Failed { path, message } => error_record(path, message),
-                })
-                .collect();
             let mut report = summarize(records, directory.truncated);
             report.cancelled = directory.cancelled;
             report.entry_limit = Some(max_files);
@@ -673,6 +686,9 @@ impl DesktopApp {
             }
         });
         if report.errors > 0 {
+            for (label, count) in diagnostics::counts(&report.records) {
+                ui.label(format!("{label}: {count}"));
+            }
             ui.label("Erros de leitura não são deteções de malware. Consulte as mensagens abaixo antes de decidir uma correção.");
         }
         ui.separator();
@@ -699,6 +715,14 @@ impl DesktopApp {
                         };
                         ui.label(RichText::new(&record.verdict).strong().color(color));
                         ui.label(record.path.display().to_string());
+                        if let Some(diagnostic) = &record.diagnostic {
+                            ui.label(diagnostic.kind.advice());
+                            if let Some(code) = diagnostic.os_code {
+                                ui.label(format!("Código do sistema: {code}"));
+                            }
+                        } else if record.error {
+                            ui.label("Registo antigo sem diagnóstico estruturado; conserve a mensagem original.");
+                        }
                         if let Some(size) = record.size {
                             ui.label(format!("Tamanho: {size} bytes"));
                         }
