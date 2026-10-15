@@ -13,11 +13,9 @@ use std::thread;
 use std::time::Duration;
 
 const MAX_FILES: usize = 1_000;
-const BACKGROUND: Color32 = Color32::from_rgb(15, 22, 35);
-const TEXT_MUTED: Color32 = Color32::from_rgb(161, 174, 194);
-const ACCENT: Color32 = Color32::from_rgb(62, 194, 187);
-const WARNING: Color32 = Color32::from_rgb(245, 172, 85);
-const DANGER: Color32 = Color32::from_rgb(244, 118, 118);
+mod theme;
+use theme::{ACCENT, GOLD, PURPLE, apply_theme, danger, muted, warning};
+const THEME_KEY: &str = "c2l.theme.v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Page {
@@ -55,7 +53,10 @@ struct ScanBatch {
 fn make_record(result: ScanResult, indicators: Option<&IndicatorDb>) -> Record {
     let (verdict, matched) = match classify(&result.sha256, indicators) {
         Verdict::NotChecked => ("Não verificado (sem base de indicadores)".to_owned(), false),
-        Verdict::NotListed => ("Sem correspondência; segurança não garantida".to_owned(), false),
+        Verdict::NotListed => (
+            "Sem correspondência; segurança não garantida".to_owned(),
+            false,
+        ),
         Verdict::Listed(name) => (format!("Correspondência: {name}"), true),
     };
 
@@ -138,6 +139,7 @@ struct DesktopApp {
     last_report: Option<ScanBatch>,
     status: String,
     run_count: usize,
+    dark: bool,
 }
 
 impl Default for DesktopApp {
@@ -151,6 +153,7 @@ impl Default for DesktopApp {
             last_report: None,
             status: "Pronto para uma análise manual".to_owned(),
             run_count: 0,
+            dark: true,
         }
     }
 }
@@ -189,7 +192,11 @@ impl DesktopApp {
                     report.scanned,
                     report.matched,
                     report.errors,
-                    if report.truncated { " (limite atingido)" } else { "" }
+                    if report.truncated {
+                        " (limite atingido)"
+                    } else {
+                        ""
+                    }
                 );
                 self.run_count += 1;
                 self.last_report = Some(report);
@@ -209,8 +216,20 @@ impl DesktopApp {
 
     fn nav(&mut self, ui: &mut egui::Ui) {
         ui.add_space(16.0);
-        ui.heading(RichText::new("C2L").size(30.0).color(ACCENT).strong());
-        ui.label(RichText::new("ANTIVIRUS").color(TEXT_MUTED).size(12.0));
+        egui::Frame::default()
+            .fill(ACCENT)
+            .stroke(egui::Stroke::new(2.0_f32, GOLD))
+            .inner_margin(16)
+            .corner_radius(10)
+            .show(ui, |ui| {
+                ui.set_min_width(150.0);
+                ui.heading(RichText::new("C2L").size(30.0).color(PURPLE).strong());
+                ui.label(
+                    RichText::new("ANTIVIRUS")
+                        .color(Color32::from_rgb(22, 25, 40))
+                        .size(12.0),
+                );
+            });
         ui.add_space(25.0);
         ui.separator();
         ui.add_space(8.0);
@@ -221,22 +240,36 @@ impl DesktopApp {
             (Page::Results, "Resultados"),
             (Page::Settings, "Definições"),
         ] {
-            if ui.selectable_label(self.page == page, name).clicked() {
+            if ui
+                .add_sized(
+                    [ui.available_width(), 42.0],
+                    egui::Button::new(name).selected(self.page == page),
+                )
+                .clicked()
+            {
                 self.page = page;
             }
             ui.add_space(5.0);
         }
 
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-            ui.label(RichText::new("Versão 0.1.0 · Protótipo").small().color(TEXT_MUTED));
-            ui.label(RichText::new("Sem proteção em tempo real").small().color(WARNING));
+            ui.label(
+                RichText::new("Versão 0.1.0 · Protótipo")
+                    .small()
+                    .color(muted(ui)),
+            );
+            ui.label(
+                RichText::new("Sem proteção em tempo real")
+                    .small()
+                    .color(warning(ui)),
+            );
         });
     }
 
     fn title(ui: &mut egui::Ui, heading: &str, subtitle: &str) {
         ui.add_space(12.0);
         ui.label(RichText::new(heading).size(28.0).strong());
-        ui.label(RichText::new(subtitle).color(TEXT_MUTED));
+        ui.label(RichText::new(subtitle).color(muted(ui)));
         ui.add_space(14.0);
         ui.separator();
         ui.add_space(14.0);
@@ -244,14 +277,24 @@ impl DesktopApp {
 
     fn tile(ui: &mut egui::Ui, name: &str, value: &str, color: Color32) {
         egui::Frame::default()
-            .fill(Color32::from_rgb(26, 38, 55))
+            .fill(ui.visuals().window_fill)
+            .stroke(egui::Stroke::new(1.0_f32, ACCENT))
             .inner_margin(16)
             .corner_radius(10)
             .show(ui, |ui| {
-                ui.set_min_width(182.0);
-                ui.label(RichText::new(name).color(TEXT_MUTED));
+                ui.set_min_width(160.0_f32.min(ui.available_width()));
+                ui.label(RichText::new(name).color(muted(ui)));
                 ui.add_space(8.0);
-                ui.label(RichText::new(value).size(27.0).color(color).strong());
+                ui.label(
+                    RichText::new(value)
+                        .size(27.0)
+                        .color(if color == ACCENT && !ui.visuals().dark_mode {
+                            PURPLE
+                        } else {
+                            color
+                        })
+                        .strong(),
+                );
             });
     }
 
@@ -273,23 +316,32 @@ impl DesktopApp {
                 ui,
                 "Indicadores encontrados",
                 &report.map_or(0, |r| r.matched).to_string(),
-                WARNING,
+                warning(ui),
             );
             Self::tile(
                 ui,
                 "Erros de leitura",
                 &report.map_or(0, |r| r.errors).to_string(),
-                DANGER,
+                danger(ui),
             );
         });
 
         ui.add_space(24.0);
         ui.heading("Estado do produto");
         ui.add_space(8.0);
-        ui.label(RichText::new("Scanner manual: disponível").color(ACCENT));
-        ui.label(RichText::new("Proteção em tempo real: não implementada").color(WARNING));
-        ui.label(RichText::new("Quarentena e bloqueio: não implementados").color(WARNING));
-        ui.label(RichText::new("Atualizações automáticas de assinaturas: não implementadas").color(WARNING));
+        ui.label(
+            RichText::new("Scanner manual: disponível").color(if ui.visuals().dark_mode {
+                ACCENT
+            } else {
+                PURPLE
+            }),
+        );
+        ui.label(RichText::new("Proteção em tempo real: não implementada").color(warning(ui)));
+        ui.label(RichText::new("Quarentena e bloqueio: não implementados").color(warning(ui)));
+        ui.label(
+            RichText::new("Atualizações automáticas de assinaturas: não implementadas")
+                .color(warning(ui)),
+        );
         ui.add_space(12.0);
 
         if ui.button("Iniciar uma análise  →").clicked() {
@@ -299,7 +351,7 @@ impl DesktopApp {
         ui.add_space(24.0);
         ui.label(
             RichText::new("A ausência de uma correspondência SHA-256 não significa que o ficheiro esteja seguro.")
-                .color(TEXT_MUTED),
+                .color(muted(ui)),
         );
     }
 
@@ -310,13 +362,18 @@ impl DesktopApp {
             "Escolhe um ficheiro ou uma pasta. Nenhum ficheiro será modificado.",
         );
 
-        ui.horizontal(|ui| {
+        ui.heading("1. Escolher o alvo");
+        ui.horizontal_wrapped(|ui| {
+            let previous = self.mode;
             ui.selectable_value(&mut self.mode, ScanMode::File, "Um ficheiro");
             ui.selectable_value(&mut self.mode, ScanMode::Folder, "Uma pasta");
+            if previous != self.mode {
+                self.selection = None;
+            }
         });
         ui.add_space(14.0);
 
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("Procurar…").clicked() {
                 let selected = match self.mode {
                     ScanMode::File => rfd::FileDialog::new().pick_file(),
@@ -327,28 +384,31 @@ impl DesktopApp {
                 }
             }
 
-            ui.label(
-                self.selection
-                    .as_ref()
-                    .map_or_else(|| "Nada selecionado".to_owned(), |p| p.display().to_string()),
-            );
+            ui.label(self.selection.as_ref().map_or_else(
+                || "Nada selecionado".to_owned(),
+                |p| p.display().to_string(),
+            ));
         });
 
         if self.mode == ScanMode::Folder {
             ui.label(
-                RichText::new(format!("Limite por análise: {MAX_FILES} entradas. Ligações simbólicas são ignoradas."))
-                    .small()
-                    .color(TEXT_MUTED),
+                RichText::new(format!(
+                    "Limite por análise: {MAX_FILES} entradas. Ligações simbólicas são ignoradas."
+                ))
+                .small()
+                .color(muted(ui)),
             );
         }
 
         ui.add_space(16.0);
-        ui.label(RichText::new("Base de indicadores SHA-256 (opcional)").strong());
+        ui.label(RichText::new("2. Indicadores SHA-256 (CSV local, não autenticado)").strong());
         ui.horizontal_wrapped(|ui| {
             ui.label(
                 self.indicator_file
                     .as_ref()
-                    .map_or("Nenhuma base carregada", |p| p.to_str().unwrap_or("Nome não representável")),
+                    .map_or("Nenhuma base carregada", |p| {
+                        p.to_str().unwrap_or("Nome não representável")
+                    }),
             );
 
             if ui.button("Escolher CSV…").clicked()
@@ -364,8 +424,12 @@ impl DesktopApp {
         });
 
         ui.add_space(20.0);
+        ui.heading("3. Executar em modo de leitura");
         let ready = self.selection.is_some() && self.receiver.is_none();
-        if ui.add_enabled(ready, egui::Button::new("Iniciar análise")).clicked() {
+        if ui
+            .add_enabled(ready, egui::Button::new("Iniciar análise"))
+            .clicked()
+        {
             self.begin_scan();
         }
         if self.receiver.is_some() {
@@ -374,7 +438,7 @@ impl DesktopApp {
         ui.add_space(14.0);
         ui.label(
             RichText::new("O C2L calcula hashes e, quando existe uma base fornecida, procura correspondências. Não determina se os restantes ficheiros estão seguros.")
-                .color(TEXT_MUTED),
+                .color(muted(ui)),
         );
     }
 
@@ -389,7 +453,7 @@ impl DesktopApp {
         ui.add_space(12.0);
 
         if self.receiver.is_some() {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.spinner();
                 ui.label("A calcular hashes…");
             });
@@ -402,52 +466,75 @@ impl DesktopApp {
         };
 
         if report.truncated {
-            ui.colored_label(WARNING, format!("Análise parcial: atingido o limite de {MAX_FILES} entradas."));
+            ui.colored_label(
+                warning(ui),
+                format!("Análise parcial: atingido o limite de {MAX_FILES} entradas."),
+            );
         }
 
         ui.horizontal_wrapped(|ui| {
             Self::tile(ui, "Analisados", &report.scanned.to_string(), ACCENT);
-            Self::tile(ui, "Correspondências", &report.matched.to_string(), WARNING);
-            Self::tile(ui, "Erros", &report.errors.to_string(), DANGER);
+            Self::tile(
+                ui,
+                "Correspondências",
+                &report.matched.to_string(),
+                warning(ui),
+            );
+            Self::tile(ui, "Erros", &report.errors.to_string(), danger(ui));
         });
         ui.add_space(12.0);
         ui.separator();
 
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            for record in &report.records {
-                ui.add_space(5.0);
-                ui.group(|ui| {
-                    let color = if record.error {
-                        DANGER
-                    } else if record.matched {
-                        WARNING
-                    } else {
-                        TEXT_MUTED
-                    };
-                    ui.label(RichText::new(&record.verdict).strong().color(color));
-                    ui.label(record.path.display().to_string());
-                    if let Some(size) = record.size {
-                        ui.label(format!("Tamanho: {size} bytes"));
-                    }
-                    if let Some(hash) = &record.hash {
-                        ui.label(format!("SHA-256: {hash}"));
-                    }
-                });
-            }
-        });
+        egui::ScrollArea::vertical()
+            .id_salt("result_records")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for record in &report.records {
+                    ui.add_space(5.0);
+                    ui.group(|ui| {
+                        let color = if record.error {
+                            danger(ui)
+                        } else if record.matched {
+                            warning(ui)
+                        } else {
+                            muted(ui)
+                        };
+                        ui.label(RichText::new(&record.verdict).strong().color(color));
+                        ui.label(record.path.display().to_string());
+                        if let Some(size) = record.size {
+                            ui.label(format!("Tamanho: {size} bytes"));
+                        }
+                        if let Some(hash) = &record.hash {
+                            ui.label(format!("SHA-256: {hash}"));
+                        }
+                    });
+                }
+            });
     }
 
-    fn settings(&self, ui: &mut egui::Ui) {
+    fn settings(&mut self, ui: &mut egui::Ui) {
         Self::title(ui, "Definições", "Estado e limites da versão experimental.");
+        ui.heading("Aparência");
+        let previous = self.dark;
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut self.dark, false, "Claro");
+            ui.selectable_value(&mut self.dark, true, "Escuro");
+        });
+        if previous != self.dark {
+            apply_theme(ui.ctx(), self.dark);
+        }
+        ui.label("O tema é guardado neste perfil de utilizador ao fechar a aplicação.");
+        ui.add_space(16.0);
         ui.heading("Base de indicadores");
-        ui.label(
-            self.indicator_file
-                .as_ref()
-                .map_or_else(|| "Nenhuma base selecionada".to_owned(), |p| p.display().to_string()),
-        );
+        ui.label(self.indicator_file.as_ref().map_or_else(
+            || "Nenhuma base selecionada".to_owned(),
+            |p| p.display().to_string(),
+        ));
         ui.add_space(16.0);
         ui.heading("Limites");
-        ui.label(format!("Análise de pasta: máximo de {MAX_FILES} entradas registadas."));
+        ui.label(format!(
+            "Análise de pasta: máximo de {MAX_FILES} entradas registadas."
+        ));
         ui.label("Análise: apenas leitura, sem eliminação ou alteração de ficheiros.");
         ui.label("Resultados: apenas em memória, enquanto a aplicação estiver aberta.");
         ui.add_space(16.0);
@@ -457,6 +544,13 @@ impl DesktopApp {
 }
 
 impl eframe::App for DesktopApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        storage.set_string(
+            THEME_KEY,
+            if self.dark { "dark" } else { "light" }.to_owned(),
+        );
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.update_scan_state();
         if self.receiver.is_some() {
@@ -465,24 +559,38 @@ impl eframe::App for DesktopApp {
 
         egui::SidePanel::left("navigation")
             .resizable(false)
-            .default_width(178.0)
+            .default_width(210.0)
             .show(ctx, |ui| self.nav(ui));
 
         egui::TopBottomPanel::bottom("footer").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("C2L Antivirus · análise experimental, não substitui um antivírus").color(TEXT_MUTED));
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(
+                        "C2L Antivirus · análise experimental, não substitui um antivírus",
+                    )
+                    .color(muted(ui)),
+                );
                 ui.separator();
                 ui.label(format!("Análises nesta sessão: {}", self.run_count));
             });
         });
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::default().fill(BACKGROUND).inner_margin(20))
-            .show(ctx, |ui| match self.page {
-                Page::Home => self.home(ui),
-                Page::Scan => self.scan(ui),
-                Page::Results => self.results(ui),
-                Page::Settings => self.settings(ui),
+            .frame(
+                egui::Frame::default()
+                    .fill(ctx.style().visuals.panel_fill)
+                    .inner_margin(20),
+            )
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.set_max_width(1050.0);
+                    match self.page {
+                        Page::Home => self.home(ui),
+                        Page::Scan => self.scan(ui),
+                        Page::Results => self.results(ui),
+                        Page::Settings => self.settings(ui),
+                    }
+                })
             });
     }
 }
@@ -500,8 +608,16 @@ fn main() -> eframe::Result {
         "C2L Antivirus",
         options,
         Box::new(|context| {
-            context.egui_ctx.set_visuals(egui::Visuals::dark());
-            Ok(Box::new(DesktopApp::default()))
+            let dark = context
+                .storage
+                .and_then(|s| s.get_string(THEME_KEY))
+                .as_deref()
+                != Some("light");
+            apply_theme(&context.egui_ctx, dark);
+            Ok(Box::new(DesktopApp {
+                dark,
+                ..Default::default()
+            }))
         }),
     )
 }
@@ -512,12 +628,82 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
+    fn theme_is_saved_without_scan_paths_or_reports() {
+        #[derive(Default)]
+        struct Storage(std::collections::HashMap<String, String>);
+        impl eframe::Storage for Storage {
+            fn get_string(&self, key: &str) -> Option<String> {
+                self.0.get(key).cloned()
+            }
+            fn set_string(&mut self, key: &str, value: String) {
+                self.0.insert(key.to_owned(), value);
+            }
+            fn flush(&mut self) {}
+        }
+        let mut storage = Storage::default();
+        for dark in [false, true] {
+            let mut app = DesktopApp {
+                dark,
+                selection: Some(PathBuf::from("private.txt")),
+                ..Default::default()
+            };
+            eframe::App::save(&mut app, &mut storage);
+            assert_eq!(
+                eframe::Storage::get_string(&storage, THEME_KEY).as_deref(),
+                Some(if dark { "dark" } else { "light" })
+            );
+            assert_eq!(storage.0.len(), 1);
+        }
+    }
+
+    #[test]
+    fn all_pages_produce_layout_in_both_themes_at_supported_sizes() {
+        for dark in [false, true] {
+            for size in [[780.0, 540.0], [1100.0, 760.0], [1920.0, 1080.0]] {
+                for page in [Page::Home, Page::Scan, Page::Results, Page::Settings] {
+                    let ctx = egui::Context::default();
+                    apply_theme(&ctx, dark);
+                    let mut app = DesktopApp {
+                        dark,
+                        page,
+                        ..Default::default()
+                    };
+                    let output = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(size[0], size[1]),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::SidePanel::left("nav")
+                                .exact_width(210.0)
+                                .show(ctx, |ui| app.nav(ui));
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                egui::ScrollArea::vertical().show(ui, |ui| match page {
+                                    Page::Home => app.home(ui),
+                                    Page::Scan => app.scan(ui),
+                                    Page::Results => app.results(ui),
+                                    Page::Settings => app.settings(ui),
+                                });
+                            });
+                        },
+                    );
+                    assert!(!output.shapes.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn files_without_a_database_are_not_marked_clean() {
         let record = make_record(
             ScanResult {
                 path: PathBuf::from("test.exe"),
                 size_bytes: 3,
-                sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".to_owned(),
+                sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+                    .to_owned(),
             },
             None,
         );

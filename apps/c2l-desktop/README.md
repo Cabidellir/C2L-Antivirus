@@ -27,7 +27,7 @@ Os resultados mantêm-se apenas na memória enquanto a aplicação estiver abert
    e selecionar **Windows Desktop GUI**.
 2. Abrir uma execução concluída com sucesso.
 3. Descarregar o artefacto **c2l-antivirus-windows-prototype**.
-4. Extrair o ZIP e executar \`c2l-desktop.exe\` num computador Windows de testes.
+4. Extrair o ZIP e executar `c2l-desktop.exe` num computador Windows de testes.
 
 O binário não está assinado digitalmente e pode provocar alertas do Windows.
 Verifique a origem e não contorne avisos de segurança se não confiar no
@@ -37,29 +37,29 @@ programa.
 
 No terminal PowerShell, na raiz do repositório:
 
-\`\`\`powershell
+```powershell
 cargo run --manifest-path apps/c2l-desktop/Cargo.toml
-\`\`\`
+```
 
 Para gerar o executável otimizado:
 
-\`\`\`powershell
+```powershell
 cargo build --manifest-path apps/c2l-desktop/Cargo.toml --release
-\`\`\`
+```
 
 O executável ficará em
-\`apps/c2l-desktop/target/release/c2l-desktop.exe\`.
+`apps/c2l-desktop/target/release/c2l-desktop.exe`.
 
 ## Teste com ficheiro inofensivo
 
 1. No ecrã **Analisar**, escolha
-   \`tests/fixtures/c2l-demo.txt\`.
-2. Escolha a base \`tests/fixtures/demo-indicators.csv\`.
+   `tests/fixtures/c2l-demo.txt`.
+2. Escolha a base `tests/fixtures/demo-indicators.csv`.
 3. Inicie a análise.
 4. Deverá aparecer **Correspondência: C2L_DEMO_ONLY**.
 
 A correspondência é intencional e refere-se a um ficheiro de demonstração
-que contém apenas \`abc\`. Não é malware real.
+que contém apenas `abc`. Não é malware real.
 
 ## Próximas entregas propostas
 
@@ -76,3 +76,30 @@ que contém apenas \`abc\`. Não é malware real.
 
 O núcleo do scanner permanece independente da camada gráfica para continuar
 a servir o Windows CLI e a aplicação Android.
+
+## Paleta e teste de aceitação desta entrega
+
+- `#00BFFF`: marca/superfície principal e contornos dos cartões.
+- `#FFD700`: contorno da marca e destaques no tema escuro.
+- `#663399`: botões (texto branco) e tipografia de destaque no tema claro.
+- Texto pequeno usa pares com contraste mínimo 4,5:1; a marca roxa de 30 pt
+  sobre azul usa o limiar 3:1 para texto grande. Amarelo não é texto sobre branco.
+
+Em **Definições → Aparência**, escolher Claro/Escuro, fechar normalmente e
+reabrir: o tema deve manter-se no mesmo perfil Windows. Apenas a preferência
+é guardada pela aplicação; alvos, CSV e relatórios não são persistidos.
+A persistência usa o armazenamento local do eframe; falhas de escrita ou saída
+forçada podem impedir a gravação. Não exige permissões de administrador.
+
+Verificar manualmente as quatro páginas a 780×540, 1100×760 e maximizado,
+incluindo escala Windows 125%/150%: navegação legível, controlos acessíveis por
+scroll, caminhos longos com quebra e avisos de funcionalidades ausentes.
+Testar troca ficheiro/pasta (limpa o alvo), cancelamento da caixa de seleção,
+análise sem CSV, com CSV demo e com CSV inválido. Sem CSV deve indicar **Não
+verificado**, nunca “seguro”. Durante análise a GUI deve continuar a responder.
+Testes egui sem janela cobrem a construção das páginas, não substituem esta
+inspeção manual de pixels, foco e diálogos nativos.
+
+Consultar [arquitetura e marcos de segurança](../../docs/WINDOWS-SECURITY-ROADMAP.md)
+para assinaturas autenticadas, serviço Windows, quarentena, EICAR e distribuição.
+
