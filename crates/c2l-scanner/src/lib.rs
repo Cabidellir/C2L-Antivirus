@@ -145,8 +145,7 @@ mod tests {
     #[test]
     fn rejects_a_directory() {
         let error = scan_file(env!("CARGO_MANIFEST_DIR"))
-            .err()
-            .expect("a directory must be rejected");
+            .expect_err("a directory must be rejected");
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 
@@ -154,9 +153,7 @@ mod tests {
     fn reports_missing_file() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("nonexistent_c2l_scanner_test_file_1ac0e9a7");
-        let error = scan_file(path)
-            .err()
-            .expect("a missing file must be rejected");
+        let error = scan_file(path).expect_err("a missing file must be rejected");
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 
