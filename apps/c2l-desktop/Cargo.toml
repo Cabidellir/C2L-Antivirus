@@ -12,6 +12,8 @@ path = "src/main.rs"
 [dependencies]
 eframe = { version = "0.31.1", default-features = false, features = ["default_fonts", "glow", "persistence"] }
 rfd = "0.15.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 c2l-scanner = { path = "../../crates/c2l-scanner" }
 c2l-indicators = { path = "../../crates/c2l-indicators" }
 c2l-detection = { path = "../../crates/c2l-detection" }

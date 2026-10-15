@@ -6,7 +6,9 @@ O desktop Rust/egui faz análises manuais em thread separada, calcula SHA-256
 e compara um CSV local opcional. Não autentica esse CSV, não deteta malware
 desconhecido, não bloqueia execuções, não monitoriza o sistema e não altera
 ficheiros. Sem correspondência não significa seguro. A preferência de tema é
-local ao utilizador; relatórios continuam apenas em memória.
+local ao utilizador; relatórios JSON de diagnóstico são guardados no perfil
+local após cada análise, incluindo erros e cobertura parcial. Este histórico
+não é uma auditoria autenticada nem implementa autoajustes do motor.
 
 ## Limites de confiança e privilégios
 

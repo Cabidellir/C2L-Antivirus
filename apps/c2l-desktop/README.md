@@ -19,7 +19,7 @@ comparação de indicadores utilizado no CLI e partilhado com o Android.
 **Atenção: protótipo, não um antivírus de proteção ativa.** Não existe
 proteção em tempo real, bloqueio de ameaças, quarentena, limpeza, atualizações
 automáticas nem garantia de segurança para ficheiros sem correspondência.
-Os resultados mantêm-se apenas na memória enquanto a aplicação estiver aberta.
+Os resultados são guardados localmente no final de cada análise. Uma falha de gravação é apresentada na página Resultados.
 
 ## Testar sem programar
 
@@ -63,7 +63,7 @@ que contém apenas `abc`. Não é malware real.
 
 ## Próximas entregas propostas
 
-1. Persistência local segura dos resultados e exportação JSON.
+1. Progresso, cancelamento e diagnóstico estruturado dos erros a partir do histórico JSON.
 2. Indicadores autênticos com assinatura/verificação de origem, atualização
    e mecanismos de revogação.
 3. Testes de robustez, de desempenho e de falsos positivos.
@@ -86,8 +86,8 @@ a servir o Windows CLI e a aplicação Android.
   sobre azul usa o limiar 3:1 para texto grande. Amarelo não é texto sobre branco.
 
 Em **Definições → Aparência**, escolher Claro/Escuro, fechar normalmente e
-reabrir: o tema deve manter-se no mesmo perfil Windows. Apenas a preferência
-é guardada pela aplicação; alvos, CSV e relatórios não são persistidos.
+reabrir: o tema deve manter-se no mesmo perfil Windows. A preferência é guardada pelo eframe. Os relatórios são guardados separadamente,
+incluindo o alvo, o caminho do CSV escolhido e os erros de leitura.
 A persistência usa o armazenamento local do eframe; falhas de escrita ou saída
 forçada podem impedir a gravação. Não exige permissões de administrador.
 
@@ -102,3 +102,31 @@ inspeção manual de pixels, foco e diálogos nativos.
 
 Consultar [arquitetura e marcos de segurança](../../docs/WINDOWS-SECURITY-ROADMAP.md)
 para assinaturas autenticadas, serviço Windows, quarentena, EICAR e distribuição.
+
+## Histórico de diagnóstico
+
+Cada análise terminada (incluindo falhas de leitura ou CSV inválido) grava um
+JSON versionado em `%LOCALAPPDATA%/C2L-Antivirus/reports`. A gravação ocorre na
+thread de trabalho, com ficheiro temporário, sincronização e publicação final.
+A interface só confirma a gravação depois do sucesso. Interrupção abrupta antes
+da conclusão pode deixar a análise sem relatório; ficheiros `.partial` são
+ignorados. Não existe histórico retroativo de versões anteriores.
+
+Ao reabrir, o último relatório é recuperado. **Resultados → Abrir relatório
+guardado…** permite escolher anteriores. **Apenas erros** é selecionado por
+defeito se a análise tiver erros; **Todos os resultados** mostra os restantes.
+Erros e limite atingido produzem o estado **Análise parcial**. Caminhos,
+mensagens originais de erro, contadores, hash quando disponível, instante UTC
+em segundos Unix e versão da aplicação ficam no JSON. Relatórios inválidos,
+com contadores inconsistentes ou maiores que 16 MiB são rejeitados.
+
+Os dados ficam no perfil local, sem envio para servidores. Não são encriptados
+nem assinados; herdam as permissões da pasta do perfil e são dados de diagnóstico,
+não prova de auditoria contra adulteração. Conservação manual: relatórios não
+são eliminados automaticamente. O histórico não concede permissões, não cria
+exclusões e não muda o motor de deteção por si só.
+
+Teste: analisar uma pasta, verificar o caminho guardado, fechar e reabrir; os
+contadores e mensagens devem manter-se. Abrir um relatório anterior não altera
+o alvo da próxima análise. A falha de uma análise nova não deve apresentar os
+resultados da anterior como se fossem novos.

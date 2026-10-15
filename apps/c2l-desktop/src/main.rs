@@ -13,8 +13,10 @@ use std::thread;
 use std::time::Duration;
 
 const MAX_FILES: usize = 1_000;
+mod history;
 mod theme;
-use theme::{ACCENT, GOLD, PURPLE, apply_theme, danger, muted, warning};
+use serde::{Deserialize, Serialize};
+use theme::{ACCENT, GOLD, PURPLE, apply_theme, choice, danger, muted, warning};
 const THEME_KEY: &str = "c2l.theme.v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,7 +33,7 @@ enum ScanMode {
     Folder,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Record {
     path: PathBuf,
     size: Option<u64>,
@@ -41,7 +43,7 @@ struct Record {
     error: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct ScanBatch {
     records: Vec<Record>,
     scanned: usize,
@@ -130,16 +132,23 @@ fn execute_scan(
     }
 }
 
+struct FinishedScan {
+    result: Result<ScanBatch, String>,
+    saved: Result<PathBuf, String>,
+}
+
 struct DesktopApp {
     page: Page,
     mode: ScanMode,
     selection: Option<PathBuf>,
     indicator_file: Option<PathBuf>,
-    receiver: Option<Receiver<Result<ScanBatch, String>>>,
+    receiver: Option<Receiver<FinishedScan>>,
     last_report: Option<ScanBatch>,
     status: String,
     run_count: usize,
     dark: bool,
+    errors_only: bool,
+    history_notice: String,
 }
 
 impl Default for DesktopApp {
@@ -154,6 +163,8 @@ impl Default for DesktopApp {
             status: "Pronto para uma análise manual".to_owned(),
             run_count: 0,
             dark: true,
+            errors_only: false,
+            history_notice: String::new(),
         }
     }
 }
@@ -173,11 +184,31 @@ impl DesktopApp {
         let (sender, receiver) = mpsc::channel();
         self.receiver = Some(receiver);
         self.page = Page::Results;
+        self.last_report = None;
+        self.history_notice.clear();
         self.status = "Análise em curso. A janela continua disponível.".to_owned();
 
         thread::spawn(move || {
-            let result = execute_scan(mode, path, indicators);
-            let _ = sender.send(result);
+            let result = execute_scan(mode, path.clone(), indicators.clone());
+            let scan = history::SavedScan {
+                schema_version: 1,
+                app_version: env!("CARGO_PKG_VERSION").to_owned(),
+                completed_unix_seconds: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                target: path,
+                mode: match mode {
+                    ScanMode::File => "file",
+                    ScanMode::Folder => "folder",
+                }
+                .to_owned(),
+                indicator_file: indicators,
+                report: result.as_ref().ok().cloned(),
+                failure: result.as_ref().err().cloned(),
+            };
+            let saved = history::directory().and_then(|dir| history::save(&dir, &scan));
+            let _ = sender.send(FinishedScan { result, saved });
         });
     }
 
@@ -186,32 +217,57 @@ impl DesktopApp {
             return;
         };
         match receiver.try_recv() {
-            Ok(Ok(report)) => {
-                self.status = format!(
-                    "Concluído: {} ficheiros analisados, {} correspondências, {} erros{}",
-                    report.scanned,
-                    report.matched,
-                    report.errors,
-                    if report.truncated {
-                        " (limite atingido)"
-                    } else {
-                        ""
-                    }
-                );
+            Ok(finished) => {
+                self.history_notice = match finished.saved {
+                    Ok(path) => format!("Relatório guardado localmente: {}", path.display()),
+                    Err(error) => format!(
+                        "Não foi possível guardar o relatório: {error}. Os resultados desta análise estão apenas em memória."
+                    ),
+                };
+                self.accept_result(finished.result);
                 self.run_count += 1;
-                self.last_report = Some(report);
-                self.receiver = None;
-            }
-            Ok(Err(message)) => {
-                self.status = message;
                 self.receiver = None;
             }
             Err(TryRecvError::Disconnected) => {
-                self.status = "O processo de análise terminou inesperadamente.".to_owned();
+                self.status = "O processo de análise terminou inesperadamente; não foi confirmado qualquer relatório guardado.".to_owned();
                 self.receiver = None;
             }
             Err(TryRecvError::Empty) => {}
         }
+    }
+
+    fn accept_result(&mut self, result: Result<ScanBatch, String>) {
+        match result {
+            Ok(report) => {
+                self.status = format!(
+                    "{}: {} ficheiros analisados, {} correspondências, {} erros",
+                    if report.truncated || report.errors > 0 {
+                        "Análise parcial"
+                    } else {
+                        "Concluído"
+                    },
+                    report.scanned,
+                    report.matched,
+                    report.errors
+                );
+                self.errors_only = report.errors > 0;
+                self.last_report = Some(report);
+            }
+            Err(message) => {
+                self.status = message;
+                self.last_report = None;
+            }
+        }
+    }
+
+    fn restore_report(&mut self, path: PathBuf, scan: history::SavedScan) {
+        self.accept_result(match scan.report {
+            Some(report) => Ok(report),
+            None => Err(scan
+                .failure
+                .unwrap_or_else(|| "Relatório sem resultado".into())),
+        });
+        self.history_notice = format!("Histórico local carregado: {}", path.display());
     }
 
     fn nav(&mut self, ui: &mut egui::Ui) {
@@ -243,7 +299,9 @@ impl DesktopApp {
             if ui
                 .add_sized(
                     [ui.available_width(), 42.0],
-                    egui::Button::new(name).selected(self.page == page),
+                    egui::Button::new(RichText::new(name).color(Color32::WHITE))
+                        .fill(PURPLE)
+                        .selected(self.page == page),
                 )
                 .clicked()
             {
@@ -365,8 +423,8 @@ impl DesktopApp {
         ui.heading("1. Escolher o alvo");
         ui.horizontal_wrapped(|ui| {
             let previous = self.mode;
-            ui.selectable_value(&mut self.mode, ScanMode::File, "Um ficheiro");
-            ui.selectable_value(&mut self.mode, ScanMode::Folder, "Uma pasta");
+            choice(ui, &mut self.mode, ScanMode::File, "Um ficheiro");
+            choice(ui, &mut self.mode, ScanMode::Folder, "Uma pasta");
             if previous != self.mode {
                 self.selection = None;
             }
@@ -442,14 +500,31 @@ impl DesktopApp {
         );
     }
 
-    fn results(&self, ui: &mut egui::Ui) {
+    fn results(&mut self, ui: &mut egui::Ui) {
         Self::title(
             ui,
             "Resultados",
-            "Resultados apenas da última análise executada nesta sessão.",
+            "Último resultado ou relatório do histórico local.",
         );
 
         ui.label(&self.status);
+        if !self.history_notice.is_empty() {
+            ui.label(&self.history_notice);
+        }
+        if self.receiver.is_none() && ui.button("Abrir relatório guardado…").clicked() {
+            let mut dialog = rfd::FileDialog::new().add_filter("Relatório C2L", &["json"]);
+            if let Ok(dir) = history::directory() {
+                dialog = dialog.set_directory(dir);
+            }
+            if let Some(path) = dialog.pick_file() {
+                match history::load(&path) {
+                    Ok(scan) => self.restore_report(path, scan),
+                    Err(error) => {
+                        self.history_notice = format!("Não foi possível abrir o relatório: {error}")
+                    }
+                }
+            }
+        }
         ui.add_space(12.0);
 
         if self.receiver.is_some() {
@@ -483,13 +558,24 @@ impl DesktopApp {
             Self::tile(ui, "Erros", &report.errors.to_string(), danger(ui));
         });
         ui.add_space(12.0);
+        ui.horizontal_wrapped(|ui| {
+            choice(ui, &mut self.errors_only, false, "Todos os resultados");
+            choice(ui, &mut self.errors_only, true, "Apenas erros");
+        });
+        if report.errors > 0 {
+            ui.label("Erros de leitura não são deteções de malware. Consulte as mensagens abaixo antes de decidir uma correção.");
+        }
         ui.separator();
 
         egui::ScrollArea::vertical()
             .id_salt("result_records")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for record in &report.records {
+                for record in report
+                    .records
+                    .iter()
+                    .filter(|record| !self.errors_only || record.error)
+                {
                     ui.add_space(5.0);
                     ui.group(|ui| {
                         let color = if record.error {
@@ -517,8 +603,8 @@ impl DesktopApp {
         ui.heading("Aparência");
         let previous = self.dark;
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.dark, false, "Claro");
-            ui.selectable_value(&mut self.dark, true, "Escuro");
+            choice(ui, &mut self.dark, false, "Claro");
+            choice(ui, &mut self.dark, true, "Escuro");
         });
         if previous != self.dark {
             apply_theme(ui.ctx(), self.dark);
@@ -536,10 +622,15 @@ impl DesktopApp {
             "Análise de pasta: máximo de {MAX_FILES} entradas registadas."
         ));
         ui.label("Análise: apenas leitura, sem eliminação ou alteração de ficheiros.");
-        ui.label("Resultados: apenas em memória, enquanto a aplicação estiver aberta.");
+        ui.label("Resultados: relatórios JSON guardados localmente após cada análise; o último é recuperado ao abrir.");
+        if let Ok(dir) = history::directory() {
+            ui.label(format!("Pasta dos relatórios: {}", dir.display()));
+        }
+        ui.label("Os relatórios contêm caminhos e mensagens de erro, ficam neste perfil e não são enviados. São mantidos até os remover manualmente.");
+        ui.label("O histórico serve para diagnóstico; não altera permissões, exclusões ou regras automaticamente.");
         ui.add_space(16.0);
         ui.heading("Funcionalidades futuras");
-        ui.label("Proteção em tempo real, quarentena, atualizações assinadas e relatórios persistentes ainda não estão disponíveis.");
+        ui.label("Proteção em tempo real, quarentena e atualizações assinadas ainda não estão disponíveis.");
     }
 }
 
@@ -614,10 +705,18 @@ fn main() -> eframe::Result {
                 .as_deref()
                 != Some("light");
             apply_theme(&context.egui_ctx, dark);
-            Ok(Box::new(DesktopApp {
+            let mut app = DesktopApp {
                 dark,
                 ..Default::default()
-            }))
+            };
+            match history::directory().and_then(|dir| history::latest(&dir)) {
+                Ok(Some((path, scan))) => app.restore_report(path, scan),
+                Ok(None) => {}
+                Err(error) => {
+                    app.history_notice = format!("Não foi possível recuperar o histórico: {error}")
+                }
+            }
+            Ok(Box::new(app))
         }),
     )
 }
@@ -626,6 +725,71 @@ fn main() -> eframe::Result {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn light_and_dark_settings_paint_readable_titles_and_both_theme_choices() {
+        for dark in [false, true] {
+            let ctx = egui::Context::default();
+            apply_theme(&ctx, dark);
+            let mut app = DesktopApp {
+                dark,
+                ..Default::default()
+            };
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.settings(ui));
+            });
+            for (label, expected) in [
+                (
+                    "Definições",
+                    if dark {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_rgb(22, 25, 40)
+                    },
+                ),
+                ("Claro", if dark { Color32::WHITE } else { GOLD }),
+                ("Escuro", if dark { GOLD } else { Color32::WHITE }),
+            ] {
+                let shape = output
+                    .shapes
+                    .iter()
+                    .find(|shape| {
+                        matches!(&shape.shape,
+                    egui::epaint::Shape::Text(text) if text.galley.job.text == label)
+                    })
+                    .expect(label);
+                let primitives = ctx.tessellate(vec![shape.clone()], output.pixels_per_point);
+                let colors: Vec<_> = primitives
+                    .iter()
+                    .flat_map(|primitive| match &primitive.primitive {
+                        egui::epaint::Primitive::Mesh(mesh) => {
+                            mesh.vertices.iter().map(|v| v.color).collect()
+                        }
+                        _ => Vec::new(),
+                    })
+                    .collect();
+                assert!(!colors.is_empty(), "{label}");
+                assert!(
+                    colors.iter().all(|color| *color == expected),
+                    "{label}: {colors:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn failed_scan_does_not_show_previous_success_and_partial_scan_selects_errors() {
+        let mut app = DesktopApp::default();
+        app.accept_result(Ok(summarize(
+            vec![error_record("unreadable".into(), "denied".into())],
+            false,
+        )));
+        assert!(app.errors_only);
+        assert!(app.status.starts_with("Análise parcial"));
+        app.accept_result(Err("invalid CSV".into()));
+        assert!(app.last_report.is_none());
+        assert_eq!(app.status, "invalid CSV");
+    }
 
     #[test]
     fn theme_is_saved_without_scan_paths_or_reports() {

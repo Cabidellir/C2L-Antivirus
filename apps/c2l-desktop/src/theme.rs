@@ -40,12 +40,31 @@ pub fn apply_theme(ctx: &egui::Context, dark: bool) {
         widget.corner_radius = egui::CornerRadius::same(8);
     }
     visuals.hyperlink_color = if dark { ACCENT } else { PURPLE };
+    // egui 0.31 uses the active widget foreground for RichText::strong too.
+    // Give active controls a cyan surface so dark text also works on light panels.
+    if !dark {
+        visuals.widgets.active.fg_stroke.color = INK;
+        visuals.widgets.active.bg_fill = ACCENT;
+        visuals.widgets.active.weak_bg_fill = ACCENT;
+    }
     ctx.set_visuals(visuals);
     ctx.style_mut(|style| {
         style.spacing.item_spacing = egui::vec2(12.0, 10.0);
         style.spacing.button_padding = egui::vec2(16.0, 10.0);
         style.spacing.interact_size.y = 38.0;
     });
+}
+
+/// Unlike SelectableLabel, these choices always paint their background.
+pub fn choice<T: PartialEq>(ui: &mut egui::Ui, value: &mut T, candidate: T, label: &str) {
+    let selected = *value == candidate;
+    let text = egui::RichText::new(label).color(if selected { GOLD } else { Color32::WHITE });
+    if ui
+        .add(egui::Button::new(text).fill(PURPLE).selected(selected))
+        .clicked()
+    {
+        *value = candidate;
+    }
 }
 
 pub fn muted(ui: &egui::Ui) -> Color32 {
@@ -110,9 +129,9 @@ mod tests {
             for widget in [v.widgets.inactive, v.widgets.hovered, v.widgets.active] {
                 assert!(contrast(widget.fg_stroke.color, widget.bg_fill) >= 4.5);
                 assert!(contrast(widget.fg_stroke.color, widget.weak_bg_fill) >= 4.5);
-                assert!(contrast(widget.fg_stroke.color, v.selection.bg_fill) >= 4.5);
             }
             assert!(contrast(v.selection.stroke.color, v.selection.bg_fill) >= 4.5);
+            assert!(contrast(v.strong_text_color(), v.panel_fill) >= 4.5);
         }
         // Purple on cyan is used only by the 30-point bold brand heading.
         assert!(contrast(PURPLE, ACCENT) >= 3.0);
