@@ -99,7 +99,7 @@ fn show_result(result: &ScanResult, database: Option<&IndicatorDb>) -> bool {
     println!("Size: {} bytes", result.size_bytes);
     println!("SHA-256: {}", result.sha256);
 
-    let listed = match classify(&result.sha256, database) {
+    match classify(&result.sha256, database) {
         Verdict::NotChecked => {
             println!("Indicator: NOT CHECKED (no database supplied)");
             false
@@ -112,9 +112,7 @@ fn show_result(result: &ScanResult, database: Option<&IndicatorDb>) -> bool {
             println!("Indicator: MATCH ({name})");
             true
         }
-    };
-
-    listed
+    }
 }
 
 fn run() -> Result<(), String> {
