@@ -64,6 +64,9 @@ version = "0.1.0"
 [[package]]
 name = "c2l-scanner"
 version = "0.1.0"
+dependencies = [
+ "c2l-hashing",
+]
 
 [[package]]
 name = "cfg-if"
