@@ -14,6 +14,9 @@ dependencies = [
 [[package]]
 name = "c2l-cli"
 version = "0.1.0"
+dependencies = [
+ "c2l-scanner",
+]
 
 [[package]]
 name = "c2l-core"
