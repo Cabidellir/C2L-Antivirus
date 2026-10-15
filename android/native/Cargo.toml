@@ -1,0 +1,20 @@
+[package]
+name = "c2l-android"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[lib]
+name = "c2l_android"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+jni = "0.21"
+c2l-hashing = { path = "../../crates/c2l-hashing" }
+c2l-indicators = { path = "../../crates/c2l-indicators" }
+c2l-detection = { path = "../../crates/c2l-detection" }
+
+# A standalone workspace keeps the Android/JNI dependencies separate from the
+# desktop workspace lockfile. GitHub Actions builds this crate independently.
+[workspace]
