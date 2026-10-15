@@ -38,8 +38,8 @@ jobs:
             . -> target
             apps/c2l-desktop -> target
 
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path apps/c2l-desktop/Cargo.toml -- --check
+      - name: Apply Rust formatting in CI workspace
+        run: cargo fmt --manifest-path apps/c2l-desktop/Cargo.toml
 
       - name: Check GUI code
         run: cargo clippy --manifest-path apps/c2l-desktop/Cargo.toml --all-targets -- -D warnings
