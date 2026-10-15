@@ -10,3 +10,5 @@ path = "src/main.rs"
 
 [dependencies]
 c2l-scanner = { path = "../c2l-scanner" }
+c2l-indicators = { path = "../c2l-indicators" }
+c2l-detection = { path = "../c2l-detection" }
