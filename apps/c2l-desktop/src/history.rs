@@ -2,11 +2,29 @@
 use crate::ScanBatch;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const MAX_REPORT_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_REPORT_BYTES: u64 = 128 * 1024 * 1024;
+
+struct LimitedWriter<W> {
+    inner: W,
+    remaining: u64,
+}
+impl<W: Write> Write for LimitedWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() as u64 > self.remaining {
+            return Err(io::Error::other("Relatório excede 128 MiB"));
+        }
+        let count = self.inner.write(bytes)?;
+        self.remaining -= count as u64;
+        Ok(count)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SavedScan {
@@ -28,10 +46,6 @@ pub fn directory() -> Result<PathBuf, String> {
 }
 
 pub fn save(dir: &Path, scan: &SavedScan) -> Result<PathBuf, String> {
-    let bytes = serde_json::to_vec_pretty(scan).map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_REPORT_BYTES {
-        return Err("Relatório excede o limite local de 16 MiB.".to_owned());
-    }
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -45,9 +59,15 @@ pub fn save(dir: &Path, scan: &SavedScan) -> Result<PathBuf, String> {
         .create_new(true)
         .open(&temporary)
         .map_err(|e| e.to_string())?;
-    file.write_all(&bytes)
-        .and_then(|()| file.sync_all())
-        .map_err(|e| e.to_string())?;
+    {
+        let mut writer = LimitedWriter {
+            inner: BufWriter::new(&mut file),
+            remaining: MAX_REPORT_BYTES,
+        };
+        serde_json::to_writer_pretty(&mut writer, scan).map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+    }
+    file.sync_all().map_err(|e| e.to_string())?;
     drop(file);
     fs::rename(&temporary, &path).map_err(|e| e.to_string())?;
     Ok(path)
@@ -61,14 +81,14 @@ pub fn load(path: &Path) -> Result<SavedScan, String> {
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     if bytes.len() as u64 > MAX_REPORT_BYTES {
-        return Err("Relatório excede 16 MiB.".to_owned());
+        return Err("Relatório excede 128 MiB.".to_owned());
     }
     let scan: SavedScan = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    if scan.schema_version != 1 || scan.report.is_some() == scan.failure.is_some() {
+    if !matches!(scan.schema_version, 1 | 2) || scan.report.is_some() == scan.failure.is_some() {
         return Err("Versão ou resultado do relatório inválido.".to_owned());
     }
     if let Some(report) = &scan.report
-        && (report.records.len() > 2_000
+        && (report.records.len() > crate::MAX_SCAN_FILES
             || report.scanned != report.records.iter().filter(|r| !r.error).count()
             || report.errors != report.records.iter().filter(|r| r.error).count()
             || report.matched != report.records.iter().filter(|r| r.matched).count())
@@ -107,6 +127,67 @@ pub fn latest(dir: &Path) -> Result<Option<(PathBuf, SavedScan)>, String> {
 mod tests {
     use super::*;
     use crate::{error_record, summarize};
+
+    #[test]
+    fn fifty_thousand_records_and_cancelled_state_survive_disk_roundtrip() {
+        let temp = fs::canonicalize(std::env::temp_dir()).unwrap();
+        let dir = temp.join(format!(
+            "c2l-history-large-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut report = summarize(
+            (0..crate::MAX_SCAN_FILES)
+                .map(|i| error_record(format!("sample-{i}").into(), "synthetic read error".into()))
+                .collect(),
+            false,
+        );
+        report.cancelled = true;
+        report.entry_limit = Some(crate::MAX_SCAN_FILES);
+        let scan = SavedScan {
+            schema_version: 2,
+            app_version: "test".into(),
+            completed_unix_seconds: 123,
+            target: "synthetic".into(),
+            mode: "folder".into(),
+            indicator_file: None,
+            report: Some(report),
+            failure: None,
+        };
+        let path = save(&dir, &scan).unwrap();
+        let restored = load(&path).unwrap().report.unwrap();
+        assert_eq!(restored.records.len(), crate::MAX_SCAN_FILES);
+        assert_eq!(restored.errors, crate::MAX_SCAN_FILES);
+        assert!(restored.cancelled);
+        assert_eq!(restored.entry_limit, Some(crate::MAX_SCAN_FILES));
+        let resolved = fs::canonicalize(&dir).unwrap();
+        assert_eq!(resolved.parent(), Some(temp.as_path()));
+        fs::remove_dir_all(resolved).unwrap();
+    }
+
+    #[test]
+    fn writer_enforces_budget_before_allocating_an_entire_report() {
+        let mut writer = LimitedWriter {
+            inner: Vec::new(),
+            remaining: 3,
+        };
+        writer.write_all(b"abc").unwrap();
+        assert!(writer.write_all(b"d").is_err());
+        assert_eq!(writer.inner, b"abc");
+    }
+
+    #[test]
+    fn legacy_reports_default_to_not_cancelled_and_unknown_limit() {
+        let report: ScanBatch = serde_json::from_str(
+            r#"{"records":[],"scanned":0,"matched":0,"errors":0,"truncated":true}"#,
+        )
+        .unwrap();
+        assert!(!report.cancelled);
+        assert_eq!(report.entry_limit, None);
+    }
 
     #[test]
     fn reports_survive_reload_and_partial_files_are_ignored() {

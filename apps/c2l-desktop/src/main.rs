@@ -5,14 +5,20 @@
 
 use c2l_detection::{Verdict, classify};
 use c2l_indicators::IndicatorDb;
-use c2l_scanner::{FileOutcome, ScanResult, scan_directory, scan_file};
+use c2l_scanner::{FileOutcome, ScanResult, scan_directory_controlled, scan_file_cancellable};
 use eframe::egui::{self, Color32, RichText};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
 use std::thread;
 use std::time::Duration;
 
-const MAX_FILES: usize = 1_000;
+const MAX_SCAN_FILES: usize = 50_000;
+const DEFAULT_SCAN_FILES: usize = 10_000;
+const RESULT_PAGE_SIZE: usize = 100;
 mod history;
 mod theme;
 use serde::{Deserialize, Serialize};
@@ -50,6 +56,10 @@ struct ScanBatch {
     matched: usize,
     errors: usize,
     truncated: bool,
+    #[serde(default)]
+    cancelled: bool,
+    #[serde(default)]
+    entry_limit: Option<usize>,
 }
 
 fn make_record(result: ScanResult, indicators: Option<&IndicatorDb>) -> Record {
@@ -94,6 +104,7 @@ fn summarize(records: Vec<Record>, truncated: bool) -> ScanBatch {
         matched,
         errors,
         truncated,
+        ..Default::default()
     }
 }
 
@@ -101,7 +112,13 @@ fn execute_scan(
     mode: ScanMode,
     path: PathBuf,
     indicator_file: Option<PathBuf>,
+    max_files: usize,
+    cancel: &AtomicBool,
+    processed: &AtomicUsize,
 ) -> Result<ScanBatch, String> {
+    if !(1..=MAX_SCAN_FILES).contains(&max_files) {
+        return Err("Limite de análise inválido".into());
+    }
     let db = indicator_file
         .as_ref()
         .map(|location| {
@@ -111,14 +128,22 @@ fn execute_scan(
         .transpose()?;
 
     match mode {
-        ScanMode::File => {
-            let scanned = scan_file(&path)
-                .map_err(|error| format!("Não foi possível analisar o ficheiro: {error}"))?;
-            Ok(summarize(vec![make_record(scanned, db.as_ref())], false))
-        }
+        ScanMode::File => match scan_file_cancellable(&path, cancel) {
+            Ok(scanned) => {
+                processed.store(1, Ordering::Relaxed);
+                Ok(summarize(vec![make_record(scanned, db.as_ref())], false))
+            }
+            Err(_) if cancel.load(Ordering::Relaxed) => Ok(ScanBatch {
+                cancelled: true,
+                ..Default::default()
+            }),
+            Err(error) => Err(format!("Não foi possível analisar o ficheiro: {error}")),
+        },
         ScanMode::Folder => {
-            let directory = scan_directory(&path, MAX_FILES)
-                .map_err(|error| format!("Não foi possível analisar a pasta: {error}"))?;
+            let directory = scan_directory_controlled(&path, max_files, cancel, |count| {
+                processed.store(count, Ordering::Relaxed);
+            })
+            .map_err(|error| format!("Não foi possível analisar a pasta: {error}"))?;
             let records = directory
                 .outcomes
                 .into_iter()
@@ -127,7 +152,10 @@ fn execute_scan(
                     FileOutcome::Failed { path, message } => error_record(path, message),
                 })
                 .collect();
-            Ok(summarize(records, directory.truncated))
+            let mut report = summarize(records, directory.truncated);
+            report.cancelled = directory.cancelled;
+            report.entry_limit = Some(max_files);
+            Ok(report)
         }
     }
 }
@@ -149,6 +177,10 @@ struct DesktopApp {
     dark: bool,
     errors_only: bool,
     history_notice: String,
+    scan_limit: usize,
+    cancel: Arc<AtomicBool>,
+    processed: Arc<AtomicUsize>,
+    result_page: usize,
 }
 
 impl Default for DesktopApp {
@@ -165,6 +197,10 @@ impl Default for DesktopApp {
             dark: true,
             errors_only: false,
             history_notice: String::new(),
+            scan_limit: DEFAULT_SCAN_FILES,
+            cancel: Arc::new(AtomicBool::new(false)),
+            processed: Arc::new(AtomicUsize::new(0)),
+            result_page: 0,
         }
     }
 }
@@ -180,6 +216,11 @@ impl DesktopApp {
         };
 
         let mode = self.mode;
+        let max_files = self.scan_limit;
+        self.cancel = Arc::new(AtomicBool::new(false));
+        self.processed = Arc::new(AtomicUsize::new(0));
+        let cancel = Arc::clone(&self.cancel);
+        let processed = Arc::clone(&self.processed);
         let indicators = self.indicator_file.clone();
         let (sender, receiver) = mpsc::channel();
         self.receiver = Some(receiver);
@@ -189,9 +230,16 @@ impl DesktopApp {
         self.status = "Análise em curso. A janela continua disponível.".to_owned();
 
         thread::spawn(move || {
-            let result = execute_scan(mode, path.clone(), indicators.clone());
+            let result = execute_scan(
+                mode,
+                path.clone(),
+                indicators.clone(),
+                max_files,
+                &cancel,
+                &processed,
+            );
             let scan = history::SavedScan {
-                schema_version: 1,
+                schema_version: 2,
                 app_version: env!("CARGO_PKG_VERSION").to_owned(),
                 completed_unix_seconds: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -237,11 +285,14 @@ impl DesktopApp {
     }
 
     fn accept_result(&mut self, result: Result<ScanBatch, String>) {
+        self.result_page = 0;
         match result {
             Ok(report) => {
                 self.status = format!(
                     "{}: {} ficheiros analisados, {} correspondências, {} erros",
-                    if report.truncated || report.errors > 0 {
+                    if report.cancelled {
+                        "Cancelada (cobertura parcial)"
+                    } else if report.truncated || report.errors > 0 {
                         "Análise parcial"
                     } else {
                         "Concluído"
@@ -312,9 +363,13 @@ impl DesktopApp {
 
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
             ui.label(
-                RichText::new("Versão 0.1.0 · Protótipo")
-                    .small()
-                    .color(muted(ui)),
+                RichText::new(concat!(
+                    "Versão ",
+                    env!("CARGO_PKG_VERSION"),
+                    " · Protótipo"
+                ))
+                .small()
+                .color(muted(ui)),
             );
             ui.label(
                 RichText::new("Sem proteção em tempo real")
@@ -449,12 +504,16 @@ impl DesktopApp {
         });
 
         if self.mode == ScanMode::Folder {
+            ui.label("Máximo de ficheiros/erros nesta análise:");
+            ui.add_enabled_ui(self.receiver.is_none(), |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    choice(ui, &mut self.scan_limit, 1_000, "1 000");
+                    choice(ui, &mut self.scan_limit, 10_000, "10 000");
+                    choice(ui, &mut self.scan_limit, MAX_SCAN_FILES, "50 000");
+                });
+            });
             ui.label(
-                RichText::new(format!(
-                    "Limite por análise: {MAX_FILES} entradas. Ligações simbólicas são ignoradas."
-                ))
-                .small()
-                .color(muted(ui)),
+                "Ligações simbólicas são ignoradas. Atingir o limite deixa a análise parcial.",
             );
         }
 
@@ -530,7 +589,26 @@ impl DesktopApp {
         if self.receiver.is_some() {
             ui.horizontal_wrapped(|ui| {
                 ui.spinner();
-                ui.label("A calcular hashes…");
+                ui.label(format!(
+                    "{} entradas processadas (ficheiros e erros)",
+                    self.processed.load(Ordering::Relaxed)
+                ));
+            });
+            if ui
+                .add_enabled(
+                    !self.cancel.load(Ordering::Relaxed),
+                    egui::Button::new("Cancelar análise"),
+                )
+                .clicked()
+            {
+                self.cancel.store(true, Ordering::Relaxed);
+            }
+            ui.horizontal_wrapped(|ui| {
+                if self.cancel.load(Ordering::Relaxed) {
+                    ui.label("Cancelamento solicitado. A aguardar a operação de leitura atual e a gravação do relatório parcial…");
+                } else {
+                    ui.label("A calcular hashes; o total de ficheiros ainda não é conhecido.");
+                }
             });
             return;
         }
@@ -543,7 +621,10 @@ impl DesktopApp {
         if report.truncated {
             ui.colored_label(
                 warning(ui),
-                format!("Análise parcial: atingido o limite de {MAX_FILES} entradas."),
+                format!(
+                    "Análise parcial: limite de {} entradas atingido.",
+                    report.entry_limit.unwrap_or(1_000)
+                ),
             );
         }
 
@@ -558,9 +639,38 @@ impl DesktopApp {
             Self::tile(ui, "Erros", &report.errors.to_string(), danger(ui));
         });
         ui.add_space(12.0);
+        let previous_filter = self.errors_only;
         ui.horizontal_wrapped(|ui| {
             choice(ui, &mut self.errors_only, false, "Todos os resultados");
             choice(ui, &mut self.errors_only, true, "Apenas erros");
+        });
+        if previous_filter != self.errors_only {
+            self.result_page = 0;
+        }
+        let matching = report
+            .records
+            .iter()
+            .filter(|record| !self.errors_only || record.error)
+            .count();
+        let pages = matching.div_ceil(RESULT_PAGE_SIZE).max(1);
+        self.result_page = self.result_page.min(pages - 1);
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(self.result_page > 0, egui::Button::new("Anterior"))
+                .clicked()
+            {
+                self.result_page -= 1;
+            }
+            ui.label(format!(
+                "Página {} de {pages} · {matching} resultados",
+                self.result_page + 1
+            ));
+            if ui
+                .add_enabled(self.result_page + 1 < pages, egui::Button::new("Seguinte"))
+                .clicked()
+            {
+                self.result_page += 1;
+            }
         });
         if report.errors > 0 {
             ui.label("Erros de leitura não são deteções de malware. Consulte as mensagens abaixo antes de decidir uma correção.");
@@ -575,6 +685,8 @@ impl DesktopApp {
                     .records
                     .iter()
                     .filter(|record| !self.errors_only || record.error)
+                    .skip(self.result_page * RESULT_PAGE_SIZE)
+                    .take(RESULT_PAGE_SIZE)
                 {
                     ui.add_space(5.0);
                     ui.group(|ui| {
@@ -619,7 +731,7 @@ impl DesktopApp {
         ui.add_space(16.0);
         ui.heading("Limites");
         ui.label(format!(
-            "Análise de pasta: máximo de {MAX_FILES} entradas registadas."
+            "Análise de pasta: escolher até {MAX_SCAN_FILES} entradas em Analisar; 10 000 por defeito."
         ));
         ui.label("Análise: apenas leitura, sem eliminação ou alteração de ficheiros.");
         ui.label("Resultados: relatórios JSON guardados localmente após cada análise; o último é recuperado ao abrir.");
@@ -725,6 +837,46 @@ fn main() -> eframe::Result {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn results_render_only_the_selected_page() {
+        let ctx = egui::Context::default();
+        let mut app = DesktopApp {
+            result_page: 1,
+            last_report: Some(summarize(
+                (0..205)
+                    .map(|i| error_record(format!("entry-{i}").into(), "error".into()))
+                    .collect(),
+                false,
+            )),
+            ..Default::default()
+        };
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 20000.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.results(ui));
+            },
+        );
+        let labels: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text.starts_with("entry-") => {
+                    Some(text.galley.job.text.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels.len(), RESULT_PAGE_SIZE);
+        assert_eq!(labels.first(), Some(&"entry-100"));
+        assert_eq!(labels.last(), Some(&"entry-199"));
+    }
 
     #[test]
     fn light_and_dark_settings_paint_readable_titles_and_both_theme_choices() {

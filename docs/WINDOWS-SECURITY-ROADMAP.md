@@ -33,11 +33,11 @@ não é uma auditoria autenticada nem implementa autoajustes do motor.
 Não mudar ACLs de volumes, tomar posse de discos ou pedir escrita irrestrita
 no instalador. Acesso negado deve produzir cobertura parcial explícita.
 
-## Roadmap por dependências (nenhuma etapa futura está disponível)
+## Roadmap por dependências
 
 | Marco | Entrega | Critério para aceitar |
 |---|---|---|
-| M1 — scanner robusto | Progresso incremental, cancelamento cooperativo, limites de bytes/tempo/profundidade, exportação JSON versionada; leitura por handle e deteção de alterações durante hashing | Testes de acesso negado, ficheiro mutável, links/junctions, caminhos Unicode/longos, pastas enormes e cancelamento; todos os itens omitidos constam do relatório |
+| M1 — scanner robusto (parcial) | Já existe contagem de progresso, cancelamento cooperativo, limite de entradas configurável e JSON versionado. Falta processamento por lotes, retoma, limites de tempo/I/O e deteção de alterações durante hashing | Testes de acesso negado, ficheiro mutável, links/junctions, caminhos Unicode/longos, pastas enormes e cancelamento; todos os itens omitidos constam do relatório |
 | M2 — confiança nas assinaturas | Manifesto assinado com chave pública embutida, versão monotónica, hash/tamanho do pacote, validade e versão mínima do motor; verificação antes de publicar snapshot imutável | Rejeitar assinatura inválida, pacote truncado, replay/downgrade e expirado; rotação/revogação de chaves testada; falha mantém última base válida e sinaliza idade |
 | M3 — deteção explicável | Regras heurísticas versionadas sobre PE/metadados/conteúdo, separadas de correspondências exatas; evidências e confiança no resultado | Corpus benigno versionado, métricas de falsos positivos/negativos por regra; parser fuzzing; heurística isolada não remove ficheiros automaticamente |
 | M4 — quarentena recuperável | Serviço/IPC revistos, cofre com ACL restrita, blobs não executáveis, metadados de origem/hash/ACL, transação e journal durável | Crash/power loss em cada fase, disco cheio, troca de alvo e restauração com colisão testados; nunca apagar original antes de cópia íntegra e commit; restauração autorizada não sobrescreve destino |

@@ -36,12 +36,25 @@ impl Sha256State {
 
 /// Calculates the SHA-256 hash of a file, reading in 64 KiB blocks.
 pub fn sha256_file(path: impl AsRef<Path>) -> io::Result<String> {
-    let mut file = File::open(path)?;
+    sha256_reader_cancellable(File::open(path)?, || false)
+}
+
+/// Cooperative cancellation between 64 KiB reads. A blocked OS read must return first.
+pub fn sha256_reader_cancellable(
+    mut reader: impl Read,
+    mut cancelled: impl FnMut() -> bool,
+) -> io::Result<String> {
     let mut hasher = Sha256State::new();
     let mut buffer = [0u8; 64 * 1024];
 
     loop {
-        let bytes_read = file.read(&mut buffer)?;
+        if cancelled() {
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "Scan cancelled"));
+        }
+        let bytes_read = match reader.read(&mut buffer) {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
 
         if bytes_read == 0 {
             break;
@@ -57,6 +70,17 @@ pub fn sha256_file(path: impl AsRef<Path>) -> io::Result<String> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn cancellation_stops_before_a_second_block_without_returning_a_partial_hash() {
+        let mut checks = 0;
+        let result = sha256_reader_cancellable(Cursor::new(vec![42; 200_000]), || {
+            checks += 1;
+            checks > 1
+        });
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
+        assert_eq!(checks, 2);
+    }
 
     #[test]
     fn incremental_matches_known_sha256() {

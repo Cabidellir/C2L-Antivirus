@@ -8,8 +8,8 @@ comparação de indicadores utilizado no CLI e partilhado com o Android.
 
 - Painel principal com estatísticas **da última análise**.
 - Seleção de um ficheiro ou uma pasta através de uma caixa de diálogo.
-- Análise de ficheiro SHA-256 e análise recursiva de uma pasta (limite de 1 000
-  entradas; sem seguir links simbólicos).
+- Análise de ficheiro SHA-256 e análise recursiva de uma pasta (limite de 1 000, 10 000 ou 50 000
+  entradas configurável; sem seguir links simbólicos).
 - Seleção opcional de uma base de indicadores locais CSV, com comparação
   exata de SHA-256. O formato é documentado em
   [ANDROID-READINESS.md](../../docs/ANDROID-READINESS.md).
@@ -63,12 +63,11 @@ que contém apenas `abc`. Não é malware real.
 
 ## Próximas entregas propostas
 
-1. Progresso, cancelamento e diagnóstico estruturado dos erros a partir do histórico JSON.
+1. Processamento/armazenamento por lotes para volumes inteiros e diagnóstico estruturado dos erros.
 2. Indicadores autênticos com assinatura/verificação de origem, atualização
    e mecanismos de revogação.
 3. Testes de robustez, de desempenho e de falsos positivos.
-4. Melhorias da interface: progresso, cancelamento, acessibilidade e
-   opções de análise configuráveis.
+4. Acessibilidade, seleção de volumes e visualização de cobertura.
 5. Arquitetura de monitorização em tempo real no Windows (processo/serviço
    separado, privilégios mínimos, revisão de segurança e testes).
 6. Quarentena apenas após definição e teste de recuperação, integridade e
@@ -118,7 +117,7 @@ defeito se a análise tiver erros; **Todos os resultados** mostra os restantes.
 Erros e limite atingido produzem o estado **Análise parcial**. Caminhos,
 mensagens originais de erro, contadores, hash quando disponível, instante UTC
 em segundos Unix e versão da aplicação ficam no JSON. Relatórios inválidos,
-com contadores inconsistentes ou maiores que 16 MiB são rejeitados.
+com contadores inconsistentes ou maiores que 128 MiB são rejeitados.
 
 Os dados ficam no perfil local, sem envio para servidores. Não são encriptados
 nem assinados; herdam as permissões da pasta do perfil e são dados de diagnóstico,
@@ -130,3 +129,28 @@ Teste: analisar uma pasta, verificar o caminho guardado, fechar e reabrir; os
 contadores e mensagens devem manter-se. Abrir um relatório anterior não altera
 o alvo da próxima análise. A falha de uma análise nova não deve apresentar os
 resultados da anterior como se fossem novos.
+
+## Análises maiores — desktop 0.2.0
+
+Em **Analisar → Uma pasta**, escolher **1 000**, **10 000** (por defeito) ou
+**50 000** entradas. O limite inclui ficheiros e erros. A interface apresenta
+contagem de entradas processadas; não mostra uma percentagem fictícia porque
+não conhece previamente o total de ficheiros da árvore.
+
+**Cancelar análise** pede paragem cooperativa entre blocos de 64 KiB e durante
+a enumeração. Uma operação de I/O bloqueada precisa de retornar antes da
+paragem: não há garantia de cancelamento imediato. Os resultados concluídos
+antes da paragem são guardados com `cancelled: true`, mantendo cobertura parcial.
+
+Resultados são mostrados em páginas de 100. O JSON v2 inclui o limite usado e
+estado de cancelamento, e o leitor mantém compatibilidade com relatórios v1.
+A gravação é feita em fluxo com orçamento de 128 MiB; falha de gravação é visível.
+A análise ainda conserva os registos em memória, até 50 000. A enumeração usa
+até 256 níveis de pastas; ultrapassagens são erros explícitos. Não é uma análise
+ilimitada de todos os discos: gravação e consulta por lotes são o próximo passo.
+O limite antigo do CLI permanece inalterado; estas opções são do desktop.
+
+Validação: teste com 1 505 ficheiros de 3 bytes, limite de 1 000, limite exato,
+cancelamento após três entradas e cancelamento durante hashing. Histórico com
+50 000 registos sintéticos gravado/reaberto; paginação validada no egui. Isso
+não constitui benchmark de 50 000 ficheiros reais nem de um disco inteiro.
