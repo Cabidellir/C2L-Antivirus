@@ -79,7 +79,9 @@ fn print_usage() {
     println!("       c2l scan-dir <DIRECTORY> [--indicators <FILE>]");
     println!("       c2l --help");
     println!();
-    println!("Scanning is read-only. Directory scans are limited to {MAX_DIRECTORY_FILES} entries.");
+    println!(
+        "Scanning is read-only. Directory scans are limited to {MAX_DIRECTORY_FILES} entries."
+    );
     println!("Indicator matches are not definitive malware diagnoses.");
     println!("A missing match is not evidence that a file is safe.");
 }
@@ -158,9 +160,7 @@ fn run() -> Result<(), String> {
                 }
             }
 
-            println!(
-                "Summary: {scanned} scanned, {matches} indicator matches, {failures} errors"
-            );
+            println!("Summary: {scanned} scanned, {matches} indicator matches, {failures} errors");
 
             if report.truncated {
                 println!("Limit reached: scan stopped after {MAX_DIRECTORY_FILES} entries.");
