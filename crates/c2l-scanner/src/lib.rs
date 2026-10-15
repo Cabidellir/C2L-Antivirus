@@ -144,8 +144,8 @@ mod tests {
 
     #[test]
     fn rejects_a_directory() {
-        let error = scan_file(env!("CARGO_MANIFEST_DIR"))
-            .expect_err("a directory must be rejected");
+        let error =
+            scan_file(env!("CARGO_MANIFEST_DIR")).expect_err("a directory must be rejected");
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 
