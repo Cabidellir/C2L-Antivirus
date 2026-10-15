@@ -9,27 +9,37 @@ permissions:
   contents: read
 
 jobs:
-  validate:
-    name: Format, lint and test (Windows)
+  windows:
+    name: Windows format, lint and smoke tests
     runs-on: windows-latest
-
     steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-
-      - name: Cache Rust builds
-        uses: Swatinem/rust-cache@v2
-
-      - name: Check formatting
+      - uses: Swatinem/rust-cache@v2
+      - name: Formatting
         run: cargo fmt --all -- --check
-
-      - name: Run Clippy
+      - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Unit and real-file smoke tests
+        shell: cmd
+        run: tools\windows-smoke.cmd
 
-      - name: Run tests
-        run: cargo test --workspace --locked
+  android-core:
+    name: Android ARM64 portable Rust check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - name: Check portable Rust modules for Android ARM64
+        run: >
+          cargo check --locked
+          --target aarch64-linux-android
+          -p c2l-hashing
+          -p c2l-scanner
+          -p c2l-indicators
+          -p c2l-detection
