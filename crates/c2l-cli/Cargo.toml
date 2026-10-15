@@ -1,0 +1,11 @@
+[package]
+name = "c2l-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "c2l"
+path = "src/main.rs"
+
+[dependencies]
