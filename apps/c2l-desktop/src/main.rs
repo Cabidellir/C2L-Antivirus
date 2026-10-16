@@ -21,6 +21,7 @@ const DEFAULT_SCAN_FILES: usize = 10_000;
 const RESULT_PAGE_SIZE: usize = 100;
 mod diagnostics;
 mod history;
+mod retry;
 mod store;
 mod theme;
 use serde::{Deserialize, Serialize};
@@ -68,6 +69,8 @@ struct ScanBatch {
     interrupted: bool,
     #[serde(default)]
     skipped: usize,
+    #[serde(default)]
+    retry_of: Option<PathBuf>,
     #[serde(default)]
     failure: Option<String>,
     #[serde(skip)]
@@ -306,6 +309,31 @@ impl DesktopApp {
             let (result, saved) = match completed {
                 Ok((report, path)) => (Ok(report), Ok(path)),
                 Err(error) => (Err(format!("Análise interrompida: {error}")), Err(error)),
+            };
+            let _ = sender.send(FinishedScan { result, saved });
+        });
+    }
+
+    fn begin_retry(&mut self, source: PathBuf) {
+        if self.receiver.is_some() {
+            return;
+        }
+        self.cancel = Arc::new(AtomicBool::new(false));
+        self.processed = Arc::new(AtomicUsize::new(0));
+        let cancel = Arc::clone(&self.cancel);
+        let processed = Arc::clone(&self.processed);
+        let (sender, receiver) = mpsc::channel();
+        self.receiver = Some(receiver);
+        self.last_report = None;
+        self.history_notice.clear();
+        self.status =
+            "A repetir apenas os caminhos com erro; o relatório original será preservado.".into();
+        thread::spawn(move || {
+            let completed =
+                history::directory().and_then(|dir| retry::run(&source, &dir, &cancel, &processed));
+            let (result, saved) = match completed {
+                Ok((report, path)) => (Ok(report), Ok(path)),
+                Err(error) => (Err(format!("Reanálise interrompida: {error}")), Err(error)),
             };
             let _ = sender.send(FinishedScan { result, saved });
         });
@@ -676,11 +704,26 @@ impl DesktopApp {
             return;
         }
 
+        let retry_source = self
+            .last_report
+            .as_ref()
+            .filter(|r| r.errors > 0)
+            .and_then(|r| r.store_path.clone());
+        if let Some(source) = retry_source {
+            if ui.button("Reanalisar caminhos com erro").clicked() {
+                self.begin_retry(source);
+                return;
+            }
+            ui.label("Cria um novo relatório. Pastas não são percorridas; disponibilidade de ficheiros de nuvem pode depender da sincronização e implicar transferência pelo fornecedor.");
+        }
         let Some(report) = &self.last_report else {
             ui.label("Ainda não existem análises concluídas.");
             return;
         };
 
+        if let Some(source) = &report.retry_of {
+            ui.label(format!("Reanálise dos caminhos com erro de {}. Não equivale a analisar novamente todo o alvo.", source.display()));
+        }
         if let Some(failure) = &report.failure {
             ui.colored_label(danger(ui), format!("Falha: {failure}"));
         }
@@ -753,6 +796,7 @@ impl DesktopApp {
                     .map(|(k, v)| (k.to_owned(), v))
                     .collect()
             };
+            ui.label("Categorias interpretadas pelos códigos guardados; o relatório original não é alterado.");
             for (label, count) in causes {
                 ui.label(format!("{label}: {count}"));
             }
@@ -806,7 +850,7 @@ impl DesktopApp {
                         ui.label(RichText::new(&record.verdict).strong().color(color));
                         ui.label(record.path.display().to_string());
                         if let Some(diagnostic) = &record.diagnostic {
-                            ui.label(diagnostic.kind.advice());
+                            ui.label(diagnostic.effective_cause().advice());
                             if let Some(code) = diagnostic.os_code {
                                 ui.label(format!("Código do sistema: {code}"));
                             }

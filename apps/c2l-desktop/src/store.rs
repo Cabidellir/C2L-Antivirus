@@ -253,13 +253,27 @@ pub fn page(path: &Path, errors_only: bool, page: usize) -> Result<Vec<Record>, 
 pub fn causes(path: &Path) -> Result<BTreeMap<String, usize>, String> {
     let connection = open(path)?;
     let mut statement = connection
-        .prepare("SELECT substr(cause,1,256),count(*) FROM records WHERE is_error=1 GROUP BY cause LIMIT 32")
+        .prepare("SELECT substr(json,1,1048577) FROM records WHERE is_error=1")
         .map_err(|e| e.to_string())?;
-    statement
-        .query_map([], |r| Ok((r.get(0)?, count(r, 1)?)))
-        .map_err(|e| e.to_string())?
-        .collect::<Result<_, _>>()
-        .map_err(|e| e.to_string())
+    let rows = statement
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    let mut counts = BTreeMap::new();
+    for row in rows {
+        let json = row.map_err(|e| e.to_string())?;
+        if json.len() > MAX_RECORD {
+            return Err("Registo demasiado grande".into());
+        }
+        let record: Record = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        let label = record
+            .diagnostic
+            .as_ref()
+            .map_or("Sem classificação (relatório antigo)", |d| {
+                d.effective_cause().label()
+            });
+        *counts.entry(label.to_owned()).or_default() += 1;
+    }
+    Ok(counts)
 }
 
 #[cfg(test)]

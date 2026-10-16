@@ -15,18 +15,41 @@ pub enum Cause {
     InUse,
     NotFound,
     Changed,
+    CloudProviderUnavailable,
+    SystemCannotAccess,
     Other,
 }
 
+fn windows_cause(code: Option<i32>) -> Option<Cause> {
+    if !cfg!(windows) {
+        return None;
+    }
+    match code {
+        Some(32 | 33) => Some(Cause::InUse),
+        Some(362) => Some(Cause::CloudProviderUnavailable),
+        Some(1920) => Some(Cause::SystemCannotAccess),
+        _ => None,
+    }
+}
+
 impl Diagnostic {
+    /// Display-only interpretation; never rewrite historical records.
+    pub fn effective_cause(&self) -> Cause {
+        if self.kind == Cause::Other {
+            windows_cause(self.os_code).unwrap_or_else(|| self.kind.clone())
+        } else {
+            self.kind.clone()
+        }
+    }
+
     pub fn from_error(error: &io::Error) -> Self {
         let kind = if error
             .get_ref()
             .is_some_and(|e| e.is::<c2l_scanner::FileChanged>())
         {
             Cause::Changed
-        } else if cfg!(windows) && matches!(error.raw_os_error(), Some(32 | 33)) {
-            Cause::InUse
+        } else if let Some(cause) = windows_cause(error.raw_os_error()) {
+            cause
         } else {
             match error.kind() {
                 io::ErrorKind::PermissionDenied => Cause::AccessDenied,
@@ -48,6 +71,8 @@ impl Cause {
             Self::InUse => "Ficheiro em uso",
             Self::NotFound => "Ficheiro não encontrado",
             Self::Changed => "Ficheiro alterado durante a leitura",
+            Self::CloudProviderUnavailable => "Fornecedor de nuvem indisponível",
+            Self::SystemCannotAccess => "Inacessível ao sistema",
             Self::Other => "Outros erros",
         }
     }
@@ -65,6 +90,12 @@ impl Cause {
             Self::Changed => {
                 "A impressão digital foi descartada. Repita quando o ficheiro estiver estável."
             }
+            Self::CloudProviderUnavailable => {
+                "Verifique se a aplicação de sincronização está em execução e se o ficheiro está disponível localmente. Depois, repita a análise. O C2L não altera as definições de sincronização."
+            }
+            Self::SystemCannotAccess => {
+                "O Windows não conseguiu aceder ao ficheiro. O código 1920 não identifica a causa exata; conserve o caminho e a mensagem para investigação."
+            }
             Self::Other => {
                 "Conserve a mensagem e o código para investigação; este erro não prova infeção."
             }
@@ -79,7 +110,7 @@ pub fn counts(records: &[crate::Record]) -> BTreeMap<&'static str, usize> {
             .diagnostic
             .as_ref()
             .map_or("Sem classificação (relatório antigo)", |d| {
-                d.kind.label()
+                d.effective_cause().label()
             });
         *counts.entry(label).or_default() += 1;
     }
@@ -113,6 +144,34 @@ mod tests {
             assert_eq!(diagnostic.kind, Cause::InUse);
             assert_eq!(diagnostic.os_code, Some(code));
         }
+    }
+    #[test]
+    #[cfg(windows)]
+    fn historical_codes_are_interpreted_without_rewriting_them() {
+        for (code, expected) in [
+            (362, Cause::CloudProviderUnavailable),
+            (1920, Cause::SystemCannotAccess),
+        ] {
+            let old = Diagnostic {
+                kind: Cause::Other,
+                os_code: Some(code),
+            };
+            let original = serde_json::to_string(&old).unwrap();
+            assert_eq!(old.effective_cause(), expected);
+            assert_eq!(serde_json::to_string(&old).unwrap(), original);
+            assert_eq!(
+                Diagnostic::from_error(&io::Error::from_raw_os_error(code)).kind,
+                expected
+            );
+        }
+        assert_eq!(
+            Diagnostic {
+                kind: Cause::Other,
+                os_code: Some(999999)
+            }
+            .effective_cause(),
+            Cause::Other
+        );
     }
     #[test]
     fn legacy_errors_remain_unclassified() {

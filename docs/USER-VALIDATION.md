@@ -87,3 +87,25 @@ recuperação depois de saída de processo sem executar destrutores, falta de es
 simulada por quota SQLite, preservação de lotes confirmados e omissão contada do
 próprio relatório ativo. A retoma da análise não está implementada: recuperam-se
 os resultados confirmados e apresenta-se cobertura parcial.
+
+
+## Análise real de 772 108 ficheiros e entrega 0.3.1
+
+O relatório SQLite 0.3.0 consultado em modo só de leitura tem 774 614 registos:
+772 108 ficheiros analisados e 2 506 erros, sem truncagem/cancelamento/interrupção.
+Foram omitidos explicitamente dois ficheiros do relatório ativo. Base de indicadores
+ausente: zero correspondências não mede eficácia de deteção. Banco: 322 244 608 bytes.
+
+Erros: 1 375 acesso negado (5); 201 partilha (32) e 194 bloqueio de região (33);
+657 fornecedor de nuvem não ativo (362); 74 inacessíveis ao sistema (1920);
+3 alterações durante leitura e 2 caminhos não encontrados. Não publicamos caminhos
+individuais nem deduzimos a causa concreta dos 74 casos apenas pelo código 1920.
+
+A versão 0.3.1 apresenta os dois novos grupos também no relatório antigo, a partir
+dos códigos estruturados e sem reescrever o original. Oferece reanálise explícita
+dos caminhos com erro, com relatório separado. Não foi executada uma reanálise
+automática dos dados pessoais nem alterada a sincronização do utilizador.
+
+Referências primárias para a classificação:
+- [Microsoft: ERROR_CLOUD_FILE_PROVIDER_NOT_RUNNING](https://microsoft.github.io/windows-docs-rs/doc/windows/Win32/Foundation/constant.ERROR_CLOUD_FILE_PROVIDER_NOT_RUNNING.html)
+- [Microsoft: ERROR_CANT_ACCESS_FILE (1920)](https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--1700-3999-)

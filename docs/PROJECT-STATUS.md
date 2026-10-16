@@ -1,4 +1,4 @@
-# Avaliação do projeto após o desktop 0.3.0
+# Avaliação do projeto após o desktop 0.3.1
 
 Estado: protótipo funcional de scanner manual, em fase de engenharia e testes.
 Não existe ainda evidência para o apresentar como proteção antivírus de produção.
@@ -57,3 +57,10 @@ do hash e descarta resultados quando deteta alterações. Esta verificação é 
 melhor esforço: não é uma fotografia atómica, nem deteta todas as reescritas do
 mesmo tamanho com metadados preservados. Retoma, cache e identidade robusta
 continuam pendentes.
+
+
+Entrega 0.3.1: categorias próprias para códigos Windows 362/1920, interpretação
+visível dos códigos antigos sem alterar o histórico e reanálise explícita dos
+caminhos com erro num relatório separado. Teste real do utilizador: 772 108
+ficheiros analisados, 2 506 erros, sem base de indicadores. O próximo marco de
+deteção é autenticar as bases; reanalisar erros não substitui esse trabalho.

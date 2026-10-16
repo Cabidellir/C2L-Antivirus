@@ -165,3 +165,32 @@ A suite habitual valida 60 001 registos sintéticos, recuperação após saída 
 processo sem destrutores, falta de espaço simulada via quota SQLite, cancelamento,
 limites, filtros e compatibilidade JSON. Um corpus de ficheiros pequenos não
 representa o desempenho de um disco real nem mede eficácia de deteção.
+
+
+## Desktop 0.3.1 — diagnóstico e reanálise de erros
+
+Os códigos Windows 362 (fornecedor de nuvem indisponível) e 1920 (inacessível ao
+sistema, causa concreta ainda desconhecida) têm categorias e orientação próprias.
+Relatórios antigos com código estruturado são interpretados na apresentação,
+sem atualizar os seus ficheiros; mensagens sem código não são classificadas por
+suposição. A interface explica esta interpretação.
+
+Em Resultados, **Reanalisar caminhos com erro** fica disponível para relatórios
+SQLite com erros. Cria um novo histórico ligado ao original, lê apenas aqueles
+caminhos e não percorre pastas. Um caminho que seja pasta continua com erro;
+para explorar os seus filhos é necessário selecionar a pasta numa nova análise.
+Relatórios com estado interrompido são rejeitados nesta operação; cancelamentos
+normais com lotes confirmados podem ser reanalisados. Isto não retoma uma análise
+nem atualiza os contadores da execução original.
+
+A reanálise usa a base no caminho registado no relatório, se existir; o conteúdo
+dessa base pode ter mudado e continua não autenticado. Se não puder ser carregada,
+a operação falha explicitamente. Sem base, continua a mostrar não verificado.
+Ficheiros de nuvem podem necessitar de sincronização/transferência pelo fornecedor
+quando lidos. O C2L não inicia aplicações, altera configurações, termina processos,
+concede permissões, cria exclusões por erro ou executa remediação.
+
+Validação: regressão dos dois códigos, preservação byte a byte do relatório de
+origem em reanálise/cancelamento, um ficheiro que voltou a estar acessível, um
+caminho ausente e uma pasta que não deve ser percorrida; paginação e histórico
+continuam cobertos pela suite desktop.
