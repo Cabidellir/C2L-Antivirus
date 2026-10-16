@@ -8,8 +8,8 @@ comparação de indicadores utilizado no CLI e partilhado com o Android.
 
 - Painel principal com estatísticas **da última análise**.
 - Seleção de um ficheiro ou uma pasta através de uma caixa de diálogo.
-- Análise de ficheiro SHA-256 e análise recursiva de uma pasta (limite de 1 000, 10 000 ou 50 000
-  entradas configurável; sem seguir links simbólicos).
+- Análise de ficheiro SHA-256 e análise recursiva de uma pasta (limites de 1 000, 10 000 ou 50 000
+  entradas, ou sem limite de contagem; sem seguir links simbólicos).
 - Seleção opcional de uma base de indicadores locais CSV, com comparação
   exata de SHA-256. O formato é documentado em
   [ANDROID-READINESS.md](../../docs/ANDROID-READINESS.md).
@@ -19,7 +19,7 @@ comparação de indicadores utilizado no CLI e partilhado com o Android.
 **Atenção: protótipo, não um antivírus de proteção ativa.** Não existe
 proteção em tempo real, bloqueio de ameaças, quarentena, limpeza, atualizações
 automáticas nem garantia de segurança para ficheiros sem correspondência.
-Os resultados são guardados localmente no final de cada análise. Uma falha de gravação é apresentada na página Resultados.
+Os resultados são guardados localmente em lotes de 128 entradas durante a análise. Uma falha de gravação é apresentada na página Resultados.
 
 ## Testar sem programar
 
@@ -63,7 +63,7 @@ que contém apenas `abc`. Não é malware real.
 
 ## Próximas entregas propostas
 
-1. Processamento/armazenamento por lotes para volumes inteiros e diagnóstico estruturado dos erros.
+1. Retoma da análise, medições em volumes reais, cache invalidável e orçamentos de CPU/I/O.
 2. Indicadores autênticos com assinatura/verificação de origem, atualização
    e mecanismos de revogação.
 3. Testes de robustez, de desempenho e de falsos positivos.
@@ -104,71 +104,64 @@ para assinaturas autenticadas, serviço Windows, quarentena, EICAR e distribuiç
 
 ## Histórico de diagnóstico
 
-Cada análise terminada (incluindo falhas de leitura ou CSV inválido) grava um
-JSON versionado em `%LOCALAPPDATA%/C2L-Antivirus/reports`. A gravação ocorre na
-thread de trabalho, com ficheiro temporário, sincronização e publicação final.
-A interface só confirma a gravação depois do sucesso. Interrupção abrupta antes
-da conclusão pode deixar a análise sem relatório; ficheiros `.partial` são
-ignorados. Não existe histórico retroativo de versões anteriores.
+A versão 0.3.0 grava SQLite v3 em `%LOCALAPPDATA%/C2L-Antivirus/reports`,
+com transações de 128 registos. Cancelamento normal confirma também o lote final.
+Uma saída abrupta conserva os lotes confirmados, podendo perder até 127 registos
+pendentes. Ao abrir um relatório local reconhecido, o SQLite recupera o journal
+quando necessário. O estado permanece **Interrompida (cobertura parcial)**;
+recuperar o relatório não retoma a análise. Não copie apenas o `.sqlite` de uma
+análise ativa: o journal pode ser necessário para recuperar a transação.
 
-Ao reabrir, o último relatório é recuperado. **Resultados → Abrir relatório
-guardado…** permite escolher anteriores. **Apenas erros** é selecionado por
-defeito se a análise tiver erros; **Todos os resultados** mostra os restantes.
-Erros e limite atingido produzem o estado **Análise parcial**. Caminhos,
-mensagens originais de erro, contadores, hash quando disponível, instante UTC
-em segundos Unix e versão da aplicação ficam no JSON. Relatórios inválidos,
-com contadores inconsistentes ou maiores que 128 MiB são rejeitados.
+A interface consulta 100 resultados de cada vez no disco e guarda só essa página.
+O resumo e as causas são agregados no banco, sem carregar todos os registos.
+Ao reabrir, recupera o último relatório. **Resultados → Abrir relatório guardado…**
+aceita SQLite e JSON legado v1/v2 (este último continua limitado a 128 MiB/50 000
+registos). O histórico antigo não é convertido nem apagado.
+
+Falhas na base CSV antes do início não criam um relatório; são apresentadas na GUI.
+Falhas de leitura são registos. Falhas de armazenamento interrompem a análise,
+mostram erro e preservam o que foi confirmado, sem afirmar conclusão. O relatório
+ativo e os seus ficheiros auxiliares SQLite são omitidos da análise e contados
+explicitamente. Não há exclusões automáticas por acesso negado.
 
 Os dados ficam no perfil local, sem envio para servidores. Não são encriptados
 nem assinados; herdam as permissões da pasta do perfil e são dados de diagnóstico,
 não prova de auditoria contra adulteração. Conservação manual: relatórios não
-são eliminados automaticamente. O histórico não concede permissões, não cria
-exclusões e não muda o motor de deteção por si só.
+são eliminados automaticamente. O histórico não concede permissões nem muda o motor de deteção por si só.
 
 Teste: analisar uma pasta, verificar o caminho guardado, fechar e reabrir; os
 contadores e mensagens devem manter-se. Abrir um relatório anterior não altera
 o alvo da próxima análise. A falha de uma análise nova não deve apresentar os
 resultados da anterior como se fossem novos.
 
-## Análises maiores — desktop 0.2.0
+## Análises maiores — desktop 0.3.0
 
-Em **Analisar → Uma pasta**, escolher **1 000**, **10 000** (por defeito) ou
-**50 000** entradas. O limite inclui ficheiros e erros. A interface apresenta
-contagem de entradas processadas; não mostra uma percentagem fictícia porque
-não conhece previamente o total de ficheiros da árvore.
+Em **Analisar → Uma pasta**, escolher **Sem limite de entradas** para ultrapassar
+50 000. O valor por defeito continua em 10 000. Não significa recursos infinitos:
+o banco tem orçamento de 2 GiB (ficheiros temporários de journal podem ocupar
+espaço adicional), cache SQLite de 4 MiB por ligação, registos até 1 MiB e árvore
+até 256 níveis. Falta de espaço interrompe com cobertura parcial. O limite é
+por análise, não uma quota total do histórico; não existe remoção automática.
 
-**Cancelar análise** pede paragem cooperativa entre blocos de 64 KiB e durante
-a enumeração. Uma operação de I/O bloqueada precisa de retornar antes da
-paragem: não há garantia de cancelamento imediato. Os resultados concluídos
-antes da paragem são guardados com `cancelled: true`, mantendo cobertura parcial.
+O progresso conta entradas processadas, podendo incluir até 127 ainda pendentes
+na transação. Não há percentagem sem conhecer o total. **Cancelar análise** é
+cooperativo entre blocos de hashing de 64 KiB e durante a enumeração; uma chamada
+de I/O bloqueada tem de retornar. Não há garantia de cancelamento imediato.
 
-Resultados são mostrados em páginas de 100. O JSON v2 inclui o limite usado e
-estado de cancelamento, e o leitor mantém compatibilidade com relatórios v1.
-A gravação é feita em fluxo com orçamento de 128 MiB; falha de gravação é visível.
-A análise ainda conserva os registos em memória, até 50 000. A enumeração usa
-até 256 níveis de pastas; ultrapassagens são erros explícitos. Não é uma análise
-ilimitada de todos os discos: gravação e consulta por lotes são o próximo passo.
-O limite antigo do CLI permanece inalterado; estas opções são do desktop.
+Os diagnósticos incluem categoria, código do SO e orientação. Hashes são
+rejeitados quando se deteta alteração de tamanho/data durante leitura; não é
+uma fotografia atómica nem deteta todas as mutações com metadados preservados.
 
-Validação: teste com 1 505 ficheiros de 3 bytes, limite de 1 000, limite exato,
-cancelamento após três entradas e cancelamento durante hashing. Histórico com
-50 000 registos sintéticos gravado/reaberto; paginação validada no egui. Isso
-não constitui benchmark de 50 000 ficheiros reais nem de um disco inteiro.
+### Validação de escala
 
+O teste opcional cria e analisa 50 129 ficheiros reais de três bytes, consulta
+uma página após a entrada 50 000 e confirma ausência de truncagem/erros:
 
-### Atualização 0.2.1 — diagnóstico após testes reais
+```powershell
+cargo test --manifest-path apps/c2l-desktop/Cargo.toml --locked real_scan_above_fifty_thousand -- --ignored --nocapture
+```
 
-Nos novos resultados, o resumo agrupa erros por causa e cada registo mostra
-orientação e código do sistema quando disponível. Analisar um ficheiro individual
-inacessível também produz um registo persistido. Relatórios antigos mantêm a
-mensagem original, com classificação indicada como indisponível.
-
-Para validar: abra a 0.2.1, analise uma pasta habitual e consulte Resultados →
-erros; feche e reabra para confirmar o diagnóstico persistido. Compare apenas
-análises do mesmo alvo e com o mesmo limite. Nenhum erro cria exclusões ou concede
-privilégios. Os relatórios anteriores ficam preservados no perfil local.
-
-O hash é descartado se tamanho/data de modificação mudarem durante a leitura.
-Isto não garante uma fotografia atómica de ficheiros ativos. A entrega individual
-de resultados prepara a gravação por lotes; a GUI ainda acumula resultados e o
-limite continua em 50 000 entradas. Proteção em tempo real continua indisponível.
+A suite habitual valida 60 001 registos sintéticos, recuperação após saída de
+processo sem destrutores, falta de espaço simulada via quota SQLite, cancelamento,
+limites, filtros e compatibilidade JSON. Um corpus de ficheiros pequenos não
+representa o desempenho de um disco real nem mede eficácia de deteção.

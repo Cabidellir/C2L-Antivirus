@@ -1,17 +1,24 @@
 //! Local diagnostic reports only. Reports never drive permission changes or remediation.
 use crate::ScanBatch;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, OpenOptions};
-use std::io::{self, BufWriter, Read, Write};
+use std::fs;
+#[cfg(test)]
+use std::fs::OpenOptions;
+use std::io::Read;
+#[cfg(test)]
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_REPORT_BYTES: u64 = 128 * 1024 * 1024;
 
+#[cfg(test)]
 struct LimitedWriter<W> {
     inner: W,
     remaining: u64,
 }
+#[cfg(test)]
 impl<W: Write> Write for LimitedWriter<W> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         if bytes.len() as u64 > self.remaining {
@@ -45,6 +52,7 @@ pub fn directory() -> Result<PathBuf, String> {
         .ok_or_else(|| "LOCALAPPDATA indisponível; histórico não gravado.".to_owned())
 }
 
+#[cfg(test)]
 pub fn save(dir: &Path, scan: &SavedScan) -> Result<PathBuf, String> {
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let stamp = SystemTime::now()
@@ -74,6 +82,15 @@ pub fn save(dir: &Path, scan: &SavedScan) -> Result<PathBuf, String> {
 }
 
 pub fn load(path: &Path) -> Result<SavedScan, String> {
+    if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("sqlite"))
+    {
+        if let Ok(dir) = directory() {
+            crate::store::recover_local(path, &dir)?;
+        }
+        return crate::store::load(path);
+    }
     let mut bytes = Vec::new();
     fs::File::open(path)
         .map_err(|e| e.to_string())?
@@ -110,7 +127,7 @@ pub fn latest(dir: &Path) -> Result<Option<(PathBuf, SavedScan)>, String> {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if name.starts_with("scan-")
-            && name.ends_with(".json")
+            && (name.ends_with(".json") || name.ends_with(".sqlite"))
             && entry.file_type().map_err(|e| e.to_string())?.is_file()
         {
             paths.push(entry.path());

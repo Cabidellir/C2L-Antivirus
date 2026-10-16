@@ -47,6 +47,10 @@ jobs:
       - name: Run GUI logic tests
         run: cargo test --manifest-path apps/c2l-desktop/Cargo.toml --locked
 
+      - name: Validate scanning above fifty thousand files
+        if: github.event_name == 'workflow_dispatch'
+        run: cargo test --manifest-path apps/c2l-desktop/Cargo.toml --locked real_scan_above_fifty_thousand -- --ignored --nocapture
+
       - name: Build Windows application
         run: cargo build --manifest-path apps/c2l-desktop/Cargo.toml --release --locked
 

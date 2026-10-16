@@ -1,6 +1,6 @@
 [package]
 name = "c2l-desktop"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 publish = false
@@ -17,6 +17,7 @@ serde_json = "1"
 c2l-scanner = { path = "../../crates/c2l-scanner" }
 c2l-indicators = { path = "../../crates/c2l-indicators" }
 c2l-detection = { path = "../../crates/c2l-detection" }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 # Separate build to keep graphics dependencies outside the headless scanner workspace.
 [workspace]

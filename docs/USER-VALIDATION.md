@@ -63,3 +63,27 @@ O scanner agora emite resultados individualmente; a GUI ainda os acumula para
 o histórico JSON e mantém o limite de 50 000. A próxima etapa é armazenamento
 incremental com paginação a partir do disco, recuperação de análise interrompida
 e medições de recursos antes de oferecer análise de volumes sem este limite.
+
+
+## Aceitação de escala — desktop 0.3.0
+
+Em 16 de outubro de 2026, o teste de integração criou e analisou 50 129 ficheiros
+reais de três bytes, com histórico incremental e consulta da página após a entrada
+50 000. Resultado: 50 129 analisados, zero erros, sem truncagem ou cancelamento;
+nenhum vetor de resultados completos retido no resumo.
+
+- Tempo da análise/gravação/reabertura: 12,174 s (build final de testes debug, rusqlite 0.40.2).
+- Banco final: 18 706 432 bytes.
+- Pico observado do working set do processo de teste: 14 225 408 bytes
+  (aprox. 13,6 MiB), observado a cada 200 ms pelo processo controlador.
+- Teste completo incluindo criação e limpeza: 35,75 s.
+
+Estes números são de um corpus pequeno por ficheiro e cache local; não medem
+GUI, discos completos, ficheiros grandes, redes, eficácia antivírus ou cancelamento
+sob I/O bloqueado. Não devem ser apresentados como desempenho garantido.
+
+A suite também verifica 60 001 registos sintéticos paginados, filtro de erros,
+recuperação depois de saída de processo sem executar destrutores, falta de espaço
+simulada por quota SQLite, preservação de lotes confirmados e omissão contada do
+próprio relatório ativo. A retoma da análise não está implementada: recuperam-se
+os resultados confirmados e apresenta-se cobertura parcial.

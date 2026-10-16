@@ -117,3 +117,14 @@ podem ser partilhados; mecanismos de acesso e monitorização são da plataforma
 - [UAC](https://learn.microsoft.com/en-us/windows-server/security/user-account-control/how-user-account-control-works)
 - [Driver signing](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/windows-driver-signing-tutorial)
 - [EICAR](https://www.eicar.org/download-anti-malware-testfile/)
+
+
+### Progresso M1 — desktop 0.3.0
+
+Gravação incremental SQLite em transações de 128 entradas e leitura por páginas
+já implementadas. A opção sem limite de contagem ultrapassou 50 000 ficheiros
+num teste local, com orçamento de banco de 2 GiB e cache de 4 MiB por ligação.
+Recuperação após falha conserva lotes confirmados e indica cobertura parcial;
+não retoma automaticamente a análise. Mantêm-se pendentes retoma verificável,
+cache invalidável, limites de CPU/I/O, comparação de cobertura e ensaios em volumes
+representativos. Ver USER-VALIDATION.md para corpus, medições e limitações.

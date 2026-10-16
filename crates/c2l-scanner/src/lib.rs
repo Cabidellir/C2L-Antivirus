@@ -112,6 +112,7 @@ pub fn scan_directory_controlled(
 #[derive(Debug, Default)]
 pub struct DirectorySummary {
     pub processed: usize,
+    pub skipped: usize,
     pub truncated: bool,
     pub cancelled: bool,
 }
@@ -123,6 +124,17 @@ pub fn scan_directory_streaming(
     path: impl AsRef<Path>,
     max_files: usize,
     cancel: &AtomicBool,
+    emit: impl FnMut(FileOutcome) -> io::Result<()>,
+) -> io::Result<DirectorySummary> {
+    scan_directory_filtered(path, max_files, cancel, |_| true, emit)
+}
+
+/// Like streaming, with explicit caller exclusions counted in `skipped`.
+pub fn scan_directory_filtered(
+    path: impl AsRef<Path>,
+    max_files: usize,
+    cancel: &AtomicBool,
+    mut include: impl FnMut(&Path) -> bool,
     mut emit: impl FnMut(FileOutcome) -> io::Result<()>,
 ) -> io::Result<DirectorySummary> {
     if max_files == 0 {
@@ -176,6 +188,10 @@ pub fn scan_directory_streaming(
                         }
                     }
                     Ok(kind) if kind.is_file() => {
+                        if !include(&path) {
+                            report.skipped += 1;
+                            continue;
+                        }
                         if report.processed >= max_files {
                             report.truncated = true;
                             break;

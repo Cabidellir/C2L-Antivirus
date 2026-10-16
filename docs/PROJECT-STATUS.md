@@ -1,4 +1,4 @@
-# Avaliação do projeto após o desktop 0.2.1
+# Avaliação do projeto após o desktop 0.3.0
 
 Estado: protótipo funcional de scanner manual, em fase de engenharia e testes.
 Não existe ainda evidência para o apresentar como proteção antivírus de produção.
@@ -8,9 +8,9 @@ percentagem arbitrária de conclusão ou em resultados de eficácia não medidos
 | Área | Evidência atual | Lacuna principal |
 |---|---|---|
 | Interface Windows | Rust/egui, temas, seleção, progresso por contagem, cancelamento, páginas e histórico local | Testes manuais de DPI/acessibilidade e usabilidade continuada |
-| Scanner | SHA-256, árvore de pastas, erros individuais; desktop até 50 000 entradas | Registos ainda em memória; falta processamento por lotes para volumes inteiros, cache e orçamento de tempo/I/O |
+| Scanner | SHA-256, árvore de pastas, erros individuais; emissão e gravação por lotes; contagem opcionalmente ilimitada | Retoma, cache e orçamento de tempo/I/O; testes em volumes representativos |
 | Deteção | Correspondência exata com CSV local | Não autentica indicadores; não identifica variantes por conteúdo/comportamento; sem eficácia medida |
-| Diagnóstico | JSON local, cobertura parcial, mensagens, categorias e códigos de erro | Comparação entre execuções e auditoria autenticada |
+| Diagnóstico | SQLite incremental, leitura JSON legado, cobertura parcial, mensagens, categorias e códigos de erro | Comparação entre execuções e auditoria autenticada |
 | Segurança Windows | GUI sem elevação, sem remediação | Adaptador Windows, serviço e eventos são estruturas ainda sem implementação |
 | Quarentena/risco | Crates previstos | Não implementados; falta recuperação e validação contra perda de dados |
 | Android | Núcleo partilhado e JNI; testes no host | Testes em dispositivo, restrições da plataforma e ciclo de distribuição |
@@ -18,11 +18,12 @@ percentagem arbitrária de conclusão ou em resultados de eficácia não medidos
 
 ## Ordem recomendada das próximas entregas
 
-1. **Scanner confiável e escalável.** Relatórios por lotes/banco local para não
-   reter todos os registos na RAM, retoma após interrupção, seleção de volumes,
+1. **Scanner confiável e escalável.** Banco local e páginas em disco implementados.
+   Falta retoma da análise após interrupção (só recuperamos relatórios), seleção de volumes,
    cache invalidável e orçamentos de recursos. Confirmar estabilidade de identidade
    e conteúdo durante leitura. Medir CPU/RAM/throughput e latência de cancelamento
-   em corpora definidos antes de disponibilizar análise sem limite de contagem.
+   em corpora representativos; a opção sem limite de contagem é experimental e
+   mantém orçamento de 2 GiB por banco e o limite de profundidade.
 2. **Fechar o ciclo dos erros reais.** Quatro relatórios já revistos, incluindo
    991/9 e 49 983/17; os erros observados são acesso negado e ficheiros em uso.
    Causas estruturadas e regressão de partilha Windows implementadas na 0.2.1.
@@ -48,8 +49,9 @@ um mecanismo de autoajuste de segurança. Os próximos marcos devem ser aceites
 pelos testes e medições, não apenas por novas opções na interface.
 
 
-Entrega 0.2.1: API de emissão individual no núcleo e GUI consumidora, sem o vetor
-intermédio de resultados do scanner. O histórico ainda acumula registos na RAM.
+Entrega 0.3.0: emissão individual e SQLite em lotes de 128; a GUI conserva uma
+página de 100 resultados. Recuperação de lotes confirmados após falha, sem retoma
+automática; histórico antigo preservado. Relatório ativo omitido com contagem visível.
 Verifica tamanho e data de modificação no mesmo identificador aberto antes/depois
 do hash e descarta resultados quando deteta alterações. Esta verificação é de
 melhor esforço: não é uma fotografia atómica, nem deteta todas as reescritas do

@@ -5,7 +5,7 @@
 
 use c2l_detection::{Verdict, classify};
 use c2l_indicators::IndicatorDb;
-use c2l_scanner::{FileOutcome, ScanResult, scan_directory_streaming, scan_file_cancellable};
+use c2l_scanner::{FileOutcome, ScanResult, scan_directory_filtered, scan_file_cancellable};
 use eframe::egui::{self, Color32, RichText};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -21,6 +21,7 @@ const DEFAULT_SCAN_FILES: usize = 10_000;
 const RESULT_PAGE_SIZE: usize = 100;
 mod diagnostics;
 mod history;
+mod store;
 mod theme;
 use serde::{Deserialize, Serialize};
 use theme::{ACCENT, GOLD, PURPLE, apply_theme, choice, danger, muted, warning};
@@ -63,6 +64,16 @@ struct ScanBatch {
     cancelled: bool,
     #[serde(default)]
     entry_limit: Option<usize>,
+    #[serde(default)]
+    interrupted: bool,
+    #[serde(default)]
+    skipped: usize,
+    #[serde(default)]
+    failure: Option<String>,
+    #[serde(skip)]
+    store_path: Option<PathBuf>,
+    #[serde(skip)]
+    error_causes: std::collections::BTreeMap<String, usize>,
 }
 
 fn make_record(result: ScanResult, indicators: Option<&IndicatorDb>) -> Record {
@@ -105,6 +116,7 @@ fn io_error_record(path: PathBuf, error: std::io::Error) -> Record {
     record
 }
 
+#[cfg(test)]
 fn summarize(records: Vec<Record>, truncated: bool) -> ScanBatch {
     let scanned = records.iter().filter(|record| !record.error).count();
     let matched = records.iter().filter(|record| record.matched).count();
@@ -120,57 +132,96 @@ fn summarize(records: Vec<Record>, truncated: bool) -> ScanBatch {
     }
 }
 
-fn execute_scan(
+fn execute_persisted(
     mode: ScanMode,
     path: PathBuf,
     indicator_file: Option<PathBuf>,
     max_files: usize,
     cancel: &AtomicBool,
     processed: &AtomicUsize,
-) -> Result<ScanBatch, String> {
-    if !(1..=MAX_SCAN_FILES).contains(&max_files) {
-        return Err("Limite de análise inválido".into());
-    }
+    dir: &std::path::Path,
+) -> Result<(ScanBatch, PathBuf), String> {
     let db = indicator_file
         .as_ref()
         .map(|location| {
             IndicatorDb::load(location)
-                .map_err(|error| format!("Não foi possível carregar a base: {error}"))
+                .map_err(|e| format!("Não foi possível carregar a base: {e}"))
         })
         .transpose()?;
-
-    match mode {
-        ScanMode::File => match scan_file_cancellable(&path, cancel) {
-            Ok(scanned) => {
-                processed.store(1, Ordering::Relaxed);
-                Ok(summarize(vec![make_record(scanned, db.as_ref())], false))
+    let mut header = history::SavedScan {
+        schema_version: 3,
+        app_version: env!("CARGO_PKG_VERSION").into(),
+        completed_unix_seconds: 0,
+        target: path.clone(),
+        mode: match mode {
+            ScanMode::File => "file",
+            ScanMode::Folder => "folder",
+        }
+        .into(),
+        indicator_file,
+        report: Some(ScanBatch {
+            interrupted: true,
+            entry_limit: (max_files != usize::MAX).then_some(max_files),
+            ..Default::default()
+        }),
+        failure: None,
+    };
+    let mut writer = store::Writer::create(dir, &header)?;
+    let active_report = std::fs::canonicalize(&writer.path).map_err(|e| e.to_string())?;
+    let mut emit = |outcome| {
+        let record = match outcome {
+            FileOutcome::Scanned(result) => make_record(result, db.as_ref()),
+            FileOutcome::Failed { path, error } => io_error_record(path, error),
+        };
+        writer.push(&record).map_err(std::io::Error::other)?;
+        processed.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    };
+    let result = match mode {
+        ScanMode::Folder => scan_directory_filtered(
+            &path,
+            max_files,
+            cancel,
+            |candidate| !store::is_active_file(candidate, &active_report),
+            &mut emit,
+        ),
+        ScanMode::File => {
+            let outcome = match scan_file_cancellable(&path, cancel) {
+                Ok(result) => Some(FileOutcome::Scanned(result)),
+                Err(_) if cancel.load(Ordering::Relaxed) => None,
+                Err(error) => Some(FileOutcome::Failed { path, error }),
+            };
+            match outcome {
+                Some(outcome) => emit(outcome).map(|()| c2l_scanner::DirectorySummary {
+                    processed: 1,
+                    ..Default::default()
+                }),
+                None => Ok(c2l_scanner::DirectorySummary {
+                    cancelled: true,
+                    ..Default::default()
+                }),
             }
-            Err(_) if cancel.load(Ordering::Relaxed) => Ok(ScanBatch {
-                cancelled: true,
-                ..Default::default()
-            }),
-            Err(error) => {
-                processed.store(1, Ordering::Relaxed);
-                Ok(summarize(vec![io_error_record(path, error)], false))
-            }
-        },
-        ScanMode::Folder => {
-            let mut records = Vec::new();
-            let directory = scan_directory_streaming(&path, max_files, cancel, |outcome| {
-                records.push(match outcome {
-                    FileOutcome::Scanned(result) => make_record(result, db.as_ref()),
-                    FileOutcome::Failed { path, error } => io_error_record(path, error),
-                });
-                processed.store(records.len(), Ordering::Relaxed);
-                Ok(())
-            })
-            .map_err(|error| format!("Não foi possível analisar a pasta: {error}"))?;
-            let mut report = summarize(records, directory.truncated);
-            report.cancelled = directory.cancelled;
-            report.entry_limit = Some(max_files);
-            Ok(report)
+        }
+    };
+    let report = header.report.as_mut().unwrap();
+    match result {
+        Ok(summary) => {
+            report.interrupted = false;
+            report.cancelled = summary.cancelled;
+            report.truncated = summary.truncated;
+            report.skipped = summary.skipped;
+        }
+        Err(error) => {
+            report.failure = Some(error.to_string());
         }
     }
+    header.completed_unix_seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let saved = writer.finish(&header)?;
+    let report = store::load(&saved)?.report.ok_or("Resumo em falta")?;
+    Ok((report, saved))
 }
 
 struct FinishedScan {
@@ -194,6 +245,9 @@ struct DesktopApp {
     cancel: Arc<AtomicBool>,
     processed: Arc<AtomicUsize>,
     result_page: usize,
+    cached_key: Option<(PathBuf, bool, usize)>,
+    cached_records: Vec<Record>,
+    page_error: Option<String>,
 }
 
 impl Default for DesktopApp {
@@ -214,6 +268,9 @@ impl Default for DesktopApp {
             cancel: Arc::new(AtomicBool::new(false)),
             processed: Arc::new(AtomicUsize::new(0)),
             result_page: 0,
+            cached_key: None,
+            cached_records: Vec::new(),
+            page_error: None,
         }
     }
 }
@@ -243,32 +300,13 @@ impl DesktopApp {
         self.status = "Análise em curso. A janela continua disponível.".to_owned();
 
         thread::spawn(move || {
-            let result = execute_scan(
-                mode,
-                path.clone(),
-                indicators.clone(),
-                max_files,
-                &cancel,
-                &processed,
-            );
-            let scan = history::SavedScan {
-                schema_version: 2,
-                app_version: env!("CARGO_PKG_VERSION").to_owned(),
-                completed_unix_seconds: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                target: path,
-                mode: match mode {
-                    ScanMode::File => "file",
-                    ScanMode::Folder => "folder",
-                }
-                .to_owned(),
-                indicator_file: indicators,
-                report: result.as_ref().ok().cloned(),
-                failure: result.as_ref().err().cloned(),
+            let completed = history::directory().and_then(|dir| {
+                execute_persisted(mode, path, indicators, max_files, &cancel, &processed, &dir)
+            });
+            let (result, saved) = match completed {
+                Ok((report, path)) => (Ok(report), Ok(path)),
+                Err(error) => (Err(format!("Análise interrompida: {error}")), Err(error)),
             };
-            let saved = history::directory().and_then(|dir| history::save(&dir, &scan));
             let _ = sender.send(FinishedScan { result, saved });
         });
     }
@@ -282,7 +320,7 @@ impl DesktopApp {
                 self.history_notice = match finished.saved {
                     Ok(path) => format!("Relatório guardado localmente: {}", path.display()),
                     Err(error) => format!(
-                        "Não foi possível guardar o relatório: {error}. Os resultados desta análise estão apenas em memória."
+                        "Não foi possível guardar o relatório: {error}. Os lotes já confirmados podem ser consultados no histórico; a análise não foi concluída."
                     ),
                 };
                 self.accept_result(finished.result);
@@ -299,13 +337,18 @@ impl DesktopApp {
 
     fn accept_result(&mut self, result: Result<ScanBatch, String>) {
         self.result_page = 0;
+        self.cached_key = None;
+        self.cached_records.clear();
+        self.page_error = None;
         match result {
             Ok(report) => {
                 self.status = format!(
                     "{}: {} ficheiros analisados, {} correspondências, {} erros",
-                    if report.cancelled {
+                    if report.interrupted {
+                        "Interrompida (cobertura parcial)"
+                    } else if report.cancelled {
                         "Cancelada (cobertura parcial)"
-                    } else if report.truncated || report.errors > 0 {
+                    } else if report.truncated || report.errors > 0 || report.skipped > 0 {
                         "Análise parcial"
                     } else {
                         "Concluído"
@@ -523,6 +566,12 @@ impl DesktopApp {
                     choice(ui, &mut self.scan_limit, 1_000, "1 000");
                     choice(ui, &mut self.scan_limit, 10_000, "10 000");
                     choice(ui, &mut self.scan_limit, MAX_SCAN_FILES, "50 000");
+                    choice(
+                        ui,
+                        &mut self.scan_limit,
+                        usize::MAX,
+                        "Sem limite de entradas",
+                    );
                 });
             });
             ui.label(
@@ -584,7 +633,8 @@ impl DesktopApp {
             ui.label(&self.history_notice);
         }
         if self.receiver.is_none() && ui.button("Abrir relatório guardado…").clicked() {
-            let mut dialog = rfd::FileDialog::new().add_filter("Relatório C2L", &["json"]);
+            let mut dialog =
+                rfd::FileDialog::new().add_filter("Relatório C2L", &["json", "sqlite"]);
             if let Ok(dir) = history::directory() {
                 dialog = dialog.set_directory(dir);
             }
@@ -631,6 +681,15 @@ impl DesktopApp {
             return;
         };
 
+        if let Some(failure) = &report.failure {
+            ui.colored_label(danger(ui), format!("Falha: {failure}"));
+        }
+        if report.skipped > 0 {
+            ui.label(format!("{} ficheiros do relatório ativo não analisados para evitar leitura da própria gravação.", report.skipped));
+        }
+        if report.interrupted {
+            ui.label("Histórico parcial: apenas lotes confirmados. Não houve retoma automática da análise.");
+        }
         if report.truncated {
             ui.colored_label(
                 warning(ui),
@@ -660,11 +719,11 @@ impl DesktopApp {
         if previous_filter != self.errors_only {
             self.result_page = 0;
         }
-        let matching = report
-            .records
-            .iter()
-            .filter(|record| !self.errors_only || record.error)
-            .count();
+        let matching = if self.errors_only {
+            report.errors
+        } else {
+            report.scanned + report.errors
+        };
         let pages = matching.div_ceil(RESULT_PAGE_SIZE).max(1);
         self.result_page = self.result_page.min(pages - 1);
         ui.horizontal_wrapped(|ui| {
@@ -686,24 +745,55 @@ impl DesktopApp {
             }
         });
         if report.errors > 0 {
-            for (label, count) in diagnostics::counts(&report.records) {
+            let causes = if report.store_path.is_some() {
+                report.error_causes.clone()
+            } else {
+                diagnostics::counts(&report.records)
+                    .into_iter()
+                    .map(|(k, v)| (k.to_owned(), v))
+                    .collect()
+            };
+            for (label, count) in causes {
                 ui.label(format!("{label}: {count}"));
             }
             ui.label("Erros de leitura não são deteções de malware. Consulte as mensagens abaixo antes de decidir uma correção.");
         }
         ui.separator();
 
+        let records = if let Some(path) = &report.store_path {
+            let key = (path.clone(), self.errors_only, self.result_page);
+            if self.cached_key.as_ref() != Some(&key) {
+                match store::page(path, self.errors_only, self.result_page) {
+                    Ok(records) => {
+                        self.cached_records = records;
+                        self.page_error = None;
+                    }
+                    Err(error) => {
+                        self.cached_records.clear();
+                        self.page_error = Some(error);
+                    }
+                }
+                self.cached_key = Some(key);
+            }
+            self.cached_records.clone()
+        } else {
+            report
+                .records
+                .iter()
+                .filter(|r| !self.errors_only || r.error)
+                .skip(self.result_page * RESULT_PAGE_SIZE)
+                .take(RESULT_PAGE_SIZE)
+                .cloned()
+                .collect()
+        };
+        if let Some(error) = &self.page_error {
+            ui.colored_label(danger(ui), format!("Erro ao ler página: {error}"));
+        }
         egui::ScrollArea::vertical()
             .id_salt("result_records")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for record in report
-                    .records
-                    .iter()
-                    .filter(|record| !self.errors_only || record.error)
-                    .skip(self.result_page * RESULT_PAGE_SIZE)
-                    .take(RESULT_PAGE_SIZE)
-                {
+                for record in &records {
                     ui.add_space(5.0);
                     ui.group(|ui| {
                         let color = if record.error {
@@ -754,11 +844,9 @@ impl DesktopApp {
         ));
         ui.add_space(16.0);
         ui.heading("Limites");
-        ui.label(format!(
-            "Análise de pasta: escolher até {MAX_SCAN_FILES} entradas em Analisar; 10 000 por defeito."
-        ));
+        ui.label("Análise de pasta: limites opcionais; 10 000 por defeito. Histórico incremental com orçamento de 2 GiB por análise.");
         ui.label("Análise: apenas leitura, sem eliminação ou alteração de ficheiros.");
-        ui.label("Resultados: relatórios JSON guardados localmente após cada análise; o último é recuperado ao abrir.");
+        ui.label("Resultados: gravação SQLite a cada 128 entradas; páginas de 100 registos. JSON antigo continua legível.");
         if let Ok(dir) = history::directory() {
             ui.label(format!("Pasta dos relatórios: {}", dir.display()));
         }
