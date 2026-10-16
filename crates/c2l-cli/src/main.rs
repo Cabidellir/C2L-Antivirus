@@ -151,9 +151,9 @@ fn run() -> Result<(), String> {
                             matches += 1;
                         }
                     }
-                    FileOutcome::Failed { path, message } => {
+                    FileOutcome::Failed { path, error } => {
                         failures += 1;
-                        eprintln!("Could not scan '{}': {message}", path.display());
+                        eprintln!("Could not scan '{}': {error}", path.display());
                     }
                 }
             }

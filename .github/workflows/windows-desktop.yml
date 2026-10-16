@@ -38,17 +38,21 @@ jobs:
             . -> target
             apps/c2l-desktop -> target
 
-      - name: Apply Rust formatting in CI workspace
-        run: cargo fmt --manifest-path apps/c2l-desktop/Cargo.toml
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path apps/c2l-desktop/Cargo.toml -- --check
 
       - name: Check GUI code
-        run: cargo clippy --manifest-path apps/c2l-desktop/Cargo.toml --all-targets -- -D warnings
+        run: cargo clippy --manifest-path apps/c2l-desktop/Cargo.toml --all-targets --locked -- -D warnings
 
       - name: Run GUI logic tests
-        run: cargo test --manifest-path apps/c2l-desktop/Cargo.toml
+        run: cargo test --manifest-path apps/c2l-desktop/Cargo.toml --locked
+
+      - name: Validate scanning above fifty thousand files
+        if: github.event_name == 'workflow_dispatch'
+        run: cargo test --manifest-path apps/c2l-desktop/Cargo.toml --locked real_scan_above_fifty_thousand -- --ignored --nocapture
 
       - name: Build Windows application
-        run: cargo build --manifest-path apps/c2l-desktop/Cargo.toml --release
+        run: cargo build --manifest-path apps/c2l-desktop/Cargo.toml --release --locked
 
       - name: Upload unsigned Windows executable
         uses: actions/upload-artifact@v4
