@@ -1,3 +1,19 @@
+# Estado após integração desktop 0.4.0 — 19 de outubro de 2026
+
+Novo modo padrão: análise antimalware manual com ClamAV 1.5.4 e bases oficiais,
+com atualização FreshClam, relatórios persistidos e cancelamento. O modo de hashes
+permanece apenas como diagnóstico. Isto reduz a lacuna de deteção; não entrega
+quarentena, bloqueio ou proteção em tempo real.
+
+Próxima prioridade: resposta segura/quarentena recuperável, seguida de avaliação
+de eficácia e assinatura/distribuição. Benchmark e critérios concretos em
+[MARKET-BENCHMARK.md](MARKET-BENCHMARK.md).
+
+Abaixo conserva-se a avaliação anterior como histórico; as afirmações sobre
+ausência de motor/bases referem-se à versão 0.3.1.
+
+---
+
 # Avaliação do projeto após o desktop 0.3.1
 
 Estado: protótipo funcional de scanner manual, em fase de engenharia e testes.

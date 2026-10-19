@@ -1,3 +1,59 @@
+# C2L Antivirus — desktop 0.4.0
+
+O modo principal passa a **Antimalware · ClamAV**, para análise manual de ficheiros
+ou pastas com bases oficiais. SHA-256/CSV permanece como modo de diagnóstico.
+Não há proteção em tempo real, bloqueio ou quarentena nesta versão.
+
+## Preparar e testar
+
+1. No Windows x64, execute `scripts/setup-clamav.ps1` na raiz do repositório.
+   Instala o pacote oficial 1.5.4 no perfil local, verifica o SHA-256 fixado e
+   atualiza as bases. Não pede elevação nem muda o antivírus existente.
+2. Abra o desktop e escolha **Analisar → Antimalware · ClamAV**.
+3. Use **Atualizar bases oficiais**, selecione um ficheiro/pasta e inicie a análise.
+4. Confira o resumo: deteções, erros, cancelamento e motor/base utilizados.
+
+O instalador é separado do executável; o artefacto da GUI não contém motor nem
+bases. Nesta máquina de desenvolvimento já foram instalados. A atualização é
+manual e verifica as bases com FreshClam; não há agendamento ou atualização do
+binário ClamAV nesta versão.
+
+Resultados ClamAV guardam apenas deteções/avisos, além do total de ficheiros do
+resumo do motor. Não existe um hash ou registo individual para cada ficheiro sem
+alerta. Os logs `.clamav.log` e `.clamav.stderr` ficam ao lado do SQLite.
+
+Limites fixados: 100 MiB por ficheiro, 400 MiB de conteúdo por arquivo, recursão
+interna 30. Limites excedidos e conteúdo encriptado são classificados como
+cobertura incompleta, não como prova de malware. Links simbólicos não são seguidos;
+pastas do motor e dos relatórios são excluídas e esse âmbito é indicado na GUI.
+Outros limites internos do ClamAV continuam aplicáveis. A contagem durante a
+análise é de alertas/avisos; não é percentagem de ficheiros processados.
+
+Cancelar termina apenas o processo filho ClamAV desta análise. Resultados já
+recebidos são conservados e o estado fica parcial. Relatórios limitados a 2 GiB,
+log principal a 256 MiB e diagnóstico a 16 MiB (verificados durante execução).
+Uma falha do motor nunca é convertida num resultado sem ameaças.
+
+## Validação
+
+`cargo test --manifest-path apps/c2l-desktop/Cargo.toml --locked` executa a suite
+habitual. Com motor/bases locais, executar também:
+
+```powershell
+cargo test --manifest-path apps/c2l-desktop/Cargo.toml --locked real_engine_clean_limits_cancellation_and_eicar_outcome -- --ignored --nocapture
+```
+
+O teste imprime o resultado EICAR separadamente: pode ser impedido pela proteção
+residente. Nesse caso, apenas a propagação do erro é validada; não se declara uma
+deteção EICAR aprovada. Nunca desative a proteção residente para esse teste.
+
+Consultar [benchmark e prioridades](../../docs/MARKET-BENCHMARK.md) e
+[estado do projeto](../../docs/PROJECT-STATUS.md).
+
+---
+
+## Histórico das versões anteriores (0.1–0.3)
+
 # C2L Antivirus — interface Windows (protótipo)
 
 O C2L Antivirus tem agora uma primeira interface gráfica construída com

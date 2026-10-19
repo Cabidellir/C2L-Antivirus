@@ -16,6 +16,12 @@ pub fn run(
     let source = std::fs::canonicalize(source).map_err(|e| e.to_string())?;
     let mut header = store::load(&source)?;
     let source_report = header.report.as_ref().ok_or("Relatório sem resumo")?;
+    if source_report.engine.is_some() {
+        return Err(
+            "Repita a análise no modo Antimalware; este atalho é apenas para diagnóstico SHA-256"
+                .into(),
+        );
+    }
     if source_report.interrupted {
         return Err("Este relatório está incompleto. Repita a análise da pasta para confirmar a cobertura antes de reanalisar apenas erros.".into());
     }

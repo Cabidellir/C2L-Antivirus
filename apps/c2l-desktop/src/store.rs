@@ -210,7 +210,7 @@ pub fn load(path: &Path) -> Result<SavedScan, String> {
     if errors > total || matched > total - errors {
         return Err("Contadores inválidos".into());
     }
-    report.scanned = total - errors;
+    report.scanned = report.engine_scanned.unwrap_or(total - errors);
     report.errors = errors;
     report.matched = matched;
     report.records.clear();

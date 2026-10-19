@@ -1,4 +1,34 @@
-# Observações do teste Windows — 15 de outubro de 2026
+# Validação da integração ClamAV — 19 de outubro de 2026
+
+Versão desktop 0.4.0. Motor ClamAV 1.5.4 instalado por utilizador; bases
+oficiais atualizadas por FreshClam com teste da base aprovado. Nenhum serviço,
+exclusão de segurança ou alteração de permissões foi criado.
+
+- 26 testes desktop habituais aprovados; dois testes opcionais não executados
+  nessa passagem. Formatação, Clippy sem avisos e build release aprovados.
+- Teste opcional do motor real executado separadamente: ficheiro inofensivo
+  com nome Unicode, relatório SQLite reaberto, limite de 100 MiB identificado
+  como cobertura incompleta e cancelamento aprovados.
+- **EICAR não validado:** tentativa por ficheiro recebeu erro de leitura do
+  Windows; tentativa pela entrada padrão terminou com código 2 e erro de
+  leitura. O teste regista esta situação como falha explícita de cobertura,
+  não como deteção bem-sucedida. A proteção existente não foi desativada.
+- O parser distingue deteções, avisos de limites/encriptação e erros em testes
+  sintéticos. Isso não substitui um teste positivo do motor nem mede eficácia.
+- Interface validada por testes egui sem janela em ambos os temas; inspeção
+  visual interativa da nova página e validação de DPI permanecem manuais.
+
+Para testar: abrir o executável 0.4.0, selecionar Analisar → Antimalware · ClamAV,
+atualizar as bases oficiais, escolher uma pasta pequena conhecida e iniciar.
+Confirmar motor/base no resultado e reabrir o relatório guardado. A lista contém
+deteções e avisos; os ficheiros sem alerta aparecem apenas no total do motor.
+Não há limite de 1 000 entradas neste modo, mas há limites de tamanho/recursos
+descritos na interface. Não há quarentena nem proteção em tempo real.
+
+Próximo critério de aceitação: deteção EICAR reproduzível num ambiente de teste
+isolado; depois quarentena com consentimento, recuperação e testes de integridade.
+
+# Observações históricas do teste Windows — 15 de outubro de 2026
 
 Evidência: duas capturas fornecidas pelo utilizador, da versão desktop 0.1.0.
 

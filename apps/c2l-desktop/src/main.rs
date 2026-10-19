@@ -19,6 +19,7 @@ use std::time::Duration;
 const MAX_SCAN_FILES: usize = 50_000;
 const DEFAULT_SCAN_FILES: usize = 10_000;
 const RESULT_PAGE_SIZE: usize = 100;
+mod antimalware;
 mod diagnostics;
 mod history;
 mod retry;
@@ -71,6 +72,10 @@ struct ScanBatch {
     skipped: usize,
     #[serde(default)]
     retry_of: Option<PathBuf>,
+    #[serde(default)]
+    engine: Option<String>,
+    #[serde(default)]
+    engine_scanned: Option<usize>,
     #[serde(default)]
     failure: Option<String>,
     #[serde(skip)]
@@ -235,6 +240,10 @@ struct FinishedScan {
 struct DesktopApp {
     page: Page,
     mode: ScanMode,
+    use_clamav: bool,
+    active_antimalware: bool,
+    engine_notice: String,
+    updater: Option<Receiver<Result<String, String>>>,
     selection: Option<PathBuf>,
     indicator_file: Option<PathBuf>,
     receiver: Option<Receiver<FinishedScan>>,
@@ -258,6 +267,10 @@ impl Default for DesktopApp {
         Self {
             page: Page::Home,
             mode: ScanMode::File,
+            use_clamav: true,
+            active_antimalware: false,
+            engine_notice: String::new(),
+            updater: None,
             selection: None,
             indicator_file: None,
             receiver: None,
@@ -289,6 +302,8 @@ impl DesktopApp {
         };
 
         let mode = self.mode;
+        let use_clamav = self.use_clamav;
+        self.active_antimalware = use_clamav;
         let max_files = self.scan_limit;
         self.cancel = Arc::new(AtomicBool::new(false));
         self.processed = Arc::new(AtomicUsize::new(0));
@@ -304,7 +319,13 @@ impl DesktopApp {
 
         thread::spawn(move || {
             let completed = history::directory().and_then(|dir| {
-                execute_persisted(mode, path, indicators, max_files, &cancel, &processed, &dir)
+                if use_clamav {
+                    antimalware::Engine::discover().and_then(|engine| {
+                        antimalware::scan(&engine, &path, &dir, &cancel, &processed)
+                    })
+                } else {
+                    execute_persisted(mode, path, indicators, max_files, &cancel, &processed, &dir)
+                }
             });
             let (result, saved) = match completed {
                 Ok((report, path)) => (Ok(report), Ok(path)),
@@ -315,6 +336,7 @@ impl DesktopApp {
     }
 
     fn begin_retry(&mut self, source: PathBuf) {
+        self.active_antimalware = false;
         if self.receiver.is_some() {
             return;
         }
@@ -378,6 +400,8 @@ impl DesktopApp {
                         "Cancelada (cobertura parcial)"
                     } else if report.truncated || report.errors > 0 || report.skipped > 0 {
                         "Análise parcial"
+                    } else if report.matched > 0 {
+                        "Deteções encontradas"
                     } else {
                         "Concluído"
                     },
@@ -511,7 +535,7 @@ impl DesktopApp {
             );
             Self::tile(
                 ui,
-                "Indicadores encontrados",
+                "Deteções/correspondências",
                 &report.map_or(0, |r| r.matched).to_string(),
                 warning(ui),
             );
@@ -536,7 +560,7 @@ impl DesktopApp {
         ui.label(RichText::new("Proteção em tempo real: não implementada").color(warning(ui)));
         ui.label(RichText::new("Quarentena e bloqueio: não implementados").color(warning(ui)));
         ui.label(
-            RichText::new("Atualizações automáticas de assinaturas: não implementadas")
+            RichText::new("Bases oficiais ClamAV: atualização manual disponível em Analisar")
                 .color(warning(ui)),
         );
         ui.add_space(12.0);
@@ -559,6 +583,41 @@ impl DesktopApp {
             "Escolhe um ficheiro ou uma pasta. Nenhum ficheiro será modificado.",
         );
 
+        ui.heading("Motor de análise");
+        ui.add_enabled_ui(self.receiver.is_none() && self.updater.is_none(), |ui| {
+            ui.horizontal_wrapped(|ui| {
+                choice(ui, &mut self.use_clamav, true, "Antimalware · ClamAV");
+                choice(ui, &mut self.use_clamav, false, "Diagnóstico SHA-256");
+            });
+        });
+        if self.use_clamav {
+            match antimalware::Engine::discover().and_then(|engine| engine.database_info()) {
+                Ok(info) => {
+                    ui.label(info);
+                }
+                Err(error) => {
+                    ui.colored_label(danger(ui), error);
+                }
+            }
+            if ui
+                .add_enabled(
+                    self.receiver.is_none() && self.updater.is_none(),
+                    egui::Button::new("Atualizar bases oficiais"),
+                )
+                .clicked()
+            {
+                let (sender, receiver) = mpsc::channel();
+                self.updater = Some(receiver);
+                self.engine_notice = "A atualizar e verificar as bases oficiais…".into();
+                thread::spawn(move || {
+                    let result = antimalware::Engine::discover().and_then(|engine| engine.update());
+                    let _ = sender.send(result);
+                });
+            }
+            ui.label(&self.engine_notice);
+            ui.label("Deteção manual com bases oficiais; sem eliminação ou quarentena automática. Pastas do motor e dos relatórios C2L são excluídas. Ficheiros acima de 100 MiB, conteúdo acima de 400 MiB e arquivos encriptados podem ficar por verificar.");
+        }
+        ui.add_space(12.0);
         ui.heading("1. Escolher o alvo");
         ui.horizontal_wrapped(|ui| {
             let previous = self.mode;
@@ -587,7 +646,7 @@ impl DesktopApp {
             ));
         });
 
-        if self.mode == ScanMode::Folder {
+        if self.mode == ScanMode::Folder && !self.use_clamav {
             ui.label("Máximo de ficheiros/erros nesta análise:");
             ui.add_enabled_ui(self.receiver.is_none(), |ui| {
                 ui.horizontal_wrapped(|ui| {
@@ -608,31 +667,39 @@ impl DesktopApp {
         }
 
         ui.add_space(16.0);
-        ui.label(RichText::new("2. Indicadores SHA-256 (CSV local, não autenticado)").strong());
-        ui.horizontal_wrapped(|ui| {
-            ui.label(
-                self.indicator_file
-                    .as_ref()
-                    .map_or("Nenhuma base carregada", |p| {
-                        p.to_str().unwrap_or("Nome não representável")
-                    }),
-            );
+        if !self.use_clamav {
+            ui.label(RichText::new("2. Indicadores SHA-256 (CSV local, não autenticado)").strong());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    self.indicator_file
+                        .as_ref()
+                        .map_or("Nenhuma base carregada", |p| {
+                            p.to_str().unwrap_or("Nome não representável")
+                        }),
+                );
 
-            if ui.button("Escolher CSV…").clicked()
-                && let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Indicadores", &["csv", "txt"])
-                    .pick_file()
-            {
-                self.indicator_file = Some(path);
-            }
-            if self.indicator_file.is_some() && ui.button("Remover").clicked() {
-                self.indicator_file = None;
-            }
-        });
+                if ui.button("Escolher CSV…").clicked()
+                    && let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Indicadores", &["csv", "txt"])
+                        .pick_file()
+                {
+                    self.indicator_file = Some(path);
+                }
+                if self.indicator_file.is_some() && ui.button("Remover").clicked() {
+                    self.indicator_file = None;
+                }
+            });
 
-        ui.add_space(20.0);
-        ui.heading("3. Executar em modo de leitura");
-        let ready = self.selection.is_some() && self.receiver.is_none();
+            ui.add_space(20.0);
+        }
+        ui.heading("Executar em modo de leitura");
+        let ready = self.selection.is_some()
+            && self.receiver.is_none()
+            && self.updater.is_none()
+            && (!self.use_clamav
+                || antimalware::Engine::discover()
+                    .and_then(|e| e.database_info())
+                    .is_ok());
         if ui
             .add_enabled(ready, egui::Button::new("Iniciar análise"))
             .clicked()
@@ -644,7 +711,7 @@ impl DesktopApp {
         }
         ui.add_space(14.0);
         ui.label(
-            RichText::new("O C2L calcula hashes e, quando existe uma base fornecida, procura correspondências. Não determina se os restantes ficheiros estão seguros.")
+            RichText::new("O modo Antimalware usa o ClamAV. O modo Diagnóstico SHA-256 serve para inventário e comparação de hashes. Nenhum resultado garante ausência de ameaças.")
                 .color(muted(ui)),
         );
     }
@@ -680,10 +747,14 @@ impl DesktopApp {
         if self.receiver.is_some() {
             ui.horizontal_wrapped(|ui| {
                 ui.spinner();
-                ui.label(format!(
-                    "{} entradas processadas (ficheiros e erros)",
-                    self.processed.load(Ordering::Relaxed)
-                ));
+                let count = self.processed.load(Ordering::Relaxed);
+                ui.label(if self.active_antimalware {
+                    format!(
+                        "{count} alertas/avisos recebidos; motor a carregar bases ou a analisar"
+                    )
+                } else {
+                    format!("{count} entradas processadas (ficheiros e erros)")
+                });
             });
             if ui
                 .add_enabled(
@@ -698,7 +769,7 @@ impl DesktopApp {
                 if self.cancel.load(Ordering::Relaxed) {
                     ui.label("Cancelamento solicitado. A aguardar a operação de leitura atual e a gravação do relatório parcial…");
                 } else {
-                    ui.label("A calcular hashes; o total de ficheiros ainda não é conhecido.");
+                    ui.label("Análise em curso; o total será confirmado no resumo final.");
                 }
             });
             return;
@@ -707,7 +778,7 @@ impl DesktopApp {
         let retry_source = self
             .last_report
             .as_ref()
-            .filter(|r| r.errors > 0)
+            .filter(|r| r.errors > 0 && r.engine.is_none())
             .and_then(|r| r.store_path.clone());
         if let Some(source) = retry_source {
             if ui.button("Reanalisar caminhos com erro").clicked() {
@@ -721,6 +792,10 @@ impl DesktopApp {
             return;
         };
 
+        if let Some(engine) = &report.engine {
+            ui.label(engine);
+            ui.label("Antimalware: a lista contém deteções e avisos; os ficheiros sem alerta são contabilizados no resumo. Consulte o log .clamav.log junto ao relatório para os limites e erros do motor. Não há proteção em tempo real.");
+        }
         if let Some(source) = &report.retry_of {
             ui.label(format!("Reanálise dos caminhos com erro de {}. Não equivale a analisar novamente todo o alvo.", source.display()));
         }
@@ -756,7 +831,16 @@ impl DesktopApp {
         ui.add_space(12.0);
         let previous_filter = self.errors_only;
         ui.horizontal_wrapped(|ui| {
-            choice(ui, &mut self.errors_only, false, "Todos os resultados");
+            choice(
+                ui,
+                &mut self.errors_only,
+                false,
+                if report.engine.is_some() {
+                    "Deteções e avisos"
+                } else {
+                    "Todos os resultados"
+                },
+            );
             choice(ui, &mut self.errors_only, true, "Apenas erros");
         });
         if previous_filter != self.errors_only {
@@ -765,7 +849,11 @@ impl DesktopApp {
         let matching = if self.errors_only {
             report.errors
         } else {
-            report.scanned + report.errors
+            if report.engine.is_some() {
+                report.matched + report.errors
+            } else {
+                report.scanned + report.errors
+            }
         };
         let pages = matching.div_ceil(RESULT_PAGE_SIZE).max(1);
         self.result_page = self.result_page.min(pages - 1);
@@ -898,7 +986,7 @@ impl DesktopApp {
         ui.label("O histórico serve para diagnóstico; não altera permissões, exclusões ou regras automaticamente.");
         ui.add_space(16.0);
         ui.heading("Funcionalidades futuras");
-        ui.label("Proteção em tempo real, quarentena e atualizações assinadas ainda não estão disponíveis.");
+        ui.label("Proteção em tempo real, quarentena e atualização do aplicativo ainda não estão disponíveis. As bases oficiais ClamAV podem ser atualizadas manualmente em Analisar.");
     }
 }
 
@@ -912,7 +1000,20 @@ impl eframe::App for DesktopApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.update_scan_state();
-        if self.receiver.is_some() {
+        if let Some(receiver) = &self.updater {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    self.engine_notice = result.unwrap_or_else(|e| e);
+                    self.updater = None;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.engine_notice = "Atualizador terminou inesperadamente".into();
+                    self.updater = None;
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+        if self.receiver.is_some() || self.updater.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
 
