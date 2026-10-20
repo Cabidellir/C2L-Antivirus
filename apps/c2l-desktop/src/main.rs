@@ -454,12 +454,17 @@ impl DesktopApp {
             .corner_radius(10)
             .show(ui, |ui| {
                 ui.set_min_width(150.0);
-                ui.heading(RichText::new("C2L").size(30.0).color(PURPLE).strong());
-                ui.label(
-                    RichText::new("ANTIVIRUS")
-                        .color(Color32::from_rgb(22, 25, 40))
-                        .size(12.0),
-                );
+                ui.horizontal(|ui| {
+                    theme::brand_mark(ui, 48.0);
+                    ui.vertical(|ui| {
+                        ui.heading(RichText::new("C2L").size(30.0).color(PURPLE).strong());
+                        ui.label(
+                            RichText::new("ANTIVIRUS")
+                                .color(Color32::from_rgb(22, 25, 40))
+                                .size(11.0),
+                        );
+                    });
+                });
             });
         ui.add_space(25.0);
         ui.separator();
@@ -478,7 +483,11 @@ impl DesktopApp {
                     [ui.available_width(), 42.0],
                     egui::Button::new(RichText::new(name).color(Color32::WHITE))
                         .fill(PURPLE)
-                        .selected(self.page == page),
+                        .stroke(egui::Stroke::new(
+                            if self.page == page { 2.0_f32 } else { 0.0_f32 },
+                            GOLD,
+                        ))
+                        .corner_radius(10),
                 )
                 .clicked()
             {
@@ -517,7 +526,13 @@ impl DesktopApp {
     fn tile(ui: &mut egui::Ui, name: &str, value: &str, color: Color32) {
         egui::Frame::default()
             .fill(ui.visuals().window_fill)
-            .stroke(egui::Stroke::new(1.0_f32, ACCENT))
+            .stroke(egui::Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.45)))
+            .shadow(egui::Shadow {
+                offset: [0, 3],
+                blur: 12,
+                spread: 0,
+                color: Color32::from_black_alpha(22),
+            })
             .inner_margin(16)
             .corner_radius(10)
             .show(ui, |ui| {
@@ -1150,6 +1165,7 @@ impl eframe::App for DesktopApp {
                     .inner_margin(20),
             )
             .show(ctx, |ui| {
+                theme::surface_texture(ui);
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.set_max_width(1050.0);
                     match self.page {
@@ -1169,6 +1185,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("C2L Antivirus — Windows")
+            .with_icon(theme::app_icon())
             .with_inner_size([1100.0, 760.0])
             .with_min_inner_size([780.0, 540.0]),
         ..Default::default()

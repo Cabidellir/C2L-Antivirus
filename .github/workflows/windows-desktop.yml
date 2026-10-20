@@ -84,13 +84,13 @@ jobs:
         run: ./scripts/package-desktop.ps1 -Executable apps/c2l-desktop/target/release/c2l-desktop.exe
       - name: Validate per-user installation in temporary directory
         shell: pwsh
-        run: ./scripts/test-desktop-package.ps1 -Package dist/c2l-windows-0.5.0
+        run: ./scripts/test-desktop-package.ps1 -Package dist/c2l-windows-0.5.1
       - name: Upload unsigned Windows executable
         uses: actions/upload-artifact@v4
         with:
           name: c2l-antivirus-windows-prototype
           path: |
             apps/c2l-desktop/target/release/c2l-desktop.exe
-            dist/c2l-windows-0.5.0.zip
+            dist/c2l-windows-0.5.1.zip
           if-no-files-found: error
           retention-days: 14

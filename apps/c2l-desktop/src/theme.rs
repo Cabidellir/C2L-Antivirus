@@ -5,6 +5,56 @@ pub const GOLD: Color32 = Color32::from_rgb(255, 215, 0);
 pub const PURPLE: Color32 = Color32::from_rgb(102, 51, 153);
 const INK: Color32 = Color32::from_rgb(22, 25, 40);
 
+/// Shared artwork for the window, taskbar and sidebar; decoded without runtime I/O.
+pub fn app_icon() -> egui::IconData {
+    egui::IconData {
+        rgba: include_bytes!("../assets/c2l-shield.rgba").to_vec(),
+        width: 256,
+        height: 256,
+    }
+}
+
+pub fn brand_mark(ui: &mut egui::Ui, size: f32) {
+    let id = egui::Id::new("c2l-brand-texture");
+    let texture = ui
+        .ctx()
+        .data_mut(|data| data.get_temp::<egui::TextureHandle>(id))
+        .unwrap_or_else(|| {
+            let texture = ui.ctx().load_texture(
+                "c2l-brand",
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [256, 256],
+                    include_bytes!("../assets/c2l-shield.rgba"),
+                ),
+                egui::TextureOptions::LINEAR,
+            );
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(id, texture.clone()));
+            texture
+        });
+    ui.image((texture.id(), egui::vec2(size, size)));
+}
+
+/// Sparse, static micro-grid, clipped to the panel. No animation or image allocation.
+pub fn surface_texture(ui: &egui::Ui) {
+    let rect = ui.max_rect().intersect(ui.clip_rect());
+    let color = if ui.visuals().dark_mode {
+        Color32::from_white_alpha(5)
+    } else {
+        Color32::from_black_alpha(5)
+    };
+    let painter = ui.painter().with_clip_rect(rect);
+    let mut y = rect.top() + 8.0;
+    while y < rect.bottom() {
+        let mut x = rect.left() + 8.0;
+        while x < rect.right() {
+            painter.circle_filled(egui::pos2(x, y), 0.65, color);
+            x += 24.0;
+        }
+        y += 24.0;
+    }
+}
+
 pub fn apply_theme(ctx: &egui::Context, dark: bool) {
     let mut visuals = if dark {
         egui::Visuals::dark()
@@ -36,7 +86,7 @@ pub fn apply_theme(ctx: &egui::Context, dark: bool) {
         widget.bg_fill = PURPLE;
         widget.weak_bg_fill = PURPLE;
         widget.fg_stroke = egui::Stroke::new(1.0_f32, Color32::WHITE);
-        widget.bg_stroke = egui::Stroke::new(1.0_f32, if dark { GOLD } else { PURPLE });
+        widget.bg_stroke = egui::Stroke::new(1.0_f32, PURPLE);
         widget.corner_radius = egui::CornerRadius::same(8);
     }
     visuals.hyperlink_color = if dark { ACCENT } else { PURPLE };
