@@ -25,8 +25,9 @@ $lines = @("DatabaseDirectory `"$database`"", 'DatabaseMirror database.clamav.ne
 [IO.File]::WriteAllLines($config, $lines, [Text.UTF8Encoding]::new($false))
 & (Join-Path $binaryDir 'clamscan.exe') --version
 if ($LASTEXITCODE -ne 0) { throw 'Engine could not start.' }
-if (-not $SkipUpdate) {
+if (-not $SkipUpdate -and -not (Test-Path -LiteralPath (Join-Path $engineRoot 'signatures.sqlite'))) {
     & (Join-Path $binaryDir 'freshclam.exe') "--config-file=$config" --quiet
     if ($LASTEXITCODE -ne 0) { throw 'Signature update failed. Retry from the application.' }
 }
+if (Test-Path -LiteralPath (Join-Path $engineRoot 'signatures.sqlite')) { Write-Output 'Managed database generations detected: use Atualizar bases oficiais in the GUI.' }
 Write-Output "Engine ready at $binaryDir. GPL notices and license remain in the extracted package."

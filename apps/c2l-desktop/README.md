@@ -1,3 +1,14 @@
+# Desktop 0.5.0
+
+Esta versão acrescenta bases por gerações, quarentena manual cifrada e recuperável,
+reanálise antes da recuperação, observação de uma pasta enquanto a GUI está aberta
+e pacote experimental por utilizador. [Entregas, testes e limites](../../docs/FIVE-MILESTONES.md).
+Não há serviço permanente nem bloqueio pré-execução. Para instalar noutra máquina,
+extrair o pacote e usar `scripts/install-desktop.ps1` e `scripts/setup-clamav.ps1`.
+Os detalhes 0.4 abaixo são históricos; a atualização atual preserva gerações.
+
+---
+
 # C2L Antivirus — desktop 0.4.0
 
 O modo principal passa a **Antimalware · ClamAV**, para análise manual de ficheiros

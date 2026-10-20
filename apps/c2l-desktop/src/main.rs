@@ -1,5 +1,5 @@
 //! C2L Antivirus desktop prototype (Windows).
-//! The program only reads selected paths. It does not offer real-time protection.
+//! Manual scanning, opt-in observation, and separately confirmed quarantine actions.
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 #![forbid(unsafe_code)]
 
@@ -22,9 +22,13 @@ const RESULT_PAGE_SIZE: usize = 100;
 mod antimalware;
 mod diagnostics;
 mod history;
+mod monitor;
+mod quarantine;
 mod retry;
+mod signatures;
 mod store;
 mod theme;
+mod vault_ui;
 use serde::{Deserialize, Serialize};
 use theme::{ACCENT, GOLD, PURPLE, apply_theme, choice, danger, muted, warning};
 const THEME_KEY: &str = "c2l.theme.v1";
@@ -35,6 +39,8 @@ enum Page {
     Scan,
     Results,
     Settings,
+    Vault,
+    Monitor,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,6 +82,10 @@ struct ScanBatch {
     engine: Option<String>,
     #[serde(default)]
     engine_scanned: Option<usize>,
+    #[serde(default)]
+    elapsed_ms: Option<u64>,
+    #[serde(default)]
+    peak_memory_bytes: Option<u64>,
     #[serde(default)]
     failure: Option<String>,
     #[serde(skip)]
@@ -239,6 +249,9 @@ struct FinishedScan {
 
 struct DesktopApp {
     page: Page,
+    vault: vault_ui::VaultUi,
+    monitor: Option<monitor::Monitor>,
+    monitor_notice: String,
     mode: ScanMode,
     use_clamav: bool,
     active_antimalware: bool,
@@ -266,6 +279,9 @@ impl Default for DesktopApp {
     fn default() -> Self {
         Self {
             page: Page::Home,
+            vault: vault_ui::VaultUi::default(),
+            monitor: None,
+            monitor_notice: String::new(),
             mode: ScanMode::File,
             use_clamav: true,
             active_antimalware: false,
@@ -454,6 +470,8 @@ impl DesktopApp {
             (Page::Scan, "Analisar"),
             (Page::Results, "Resultados"),
             (Page::Settings, "Definições"),
+            (Page::Vault, "Quarentena"),
+            (Page::Monitor, "Monitorização"),
         ] {
             if ui
                 .add_sized(
@@ -558,7 +576,10 @@ impl DesktopApp {
             }),
         );
         ui.label(RichText::new("Proteção em tempo real: não implementada").color(warning(ui)));
-        ui.label(RichText::new("Quarentena e bloqueio: não implementados").color(warning(ui)));
+        ui.label(
+            RichText::new("Quarentena manual disponível; bloqueio não implementado")
+                .color(warning(ui)),
+        );
         ui.label(
             RichText::new("Bases oficiais ClamAV: atualização manual disponível em Analisar")
                 .color(warning(ui)),
@@ -794,6 +815,15 @@ impl DesktopApp {
 
         if let Some(engine) = &report.engine {
             ui.label(engine);
+            if let Some(peak) = report.peak_memory_bytes {
+                ui.label(format!(
+                    "Memória máxima comprometida pelo motor: {:.1} MiB",
+                    peak as f64 / 1048576.0
+                ));
+            }
+            if let Some(elapsed) = report.elapsed_ms {
+                ui.label(format!("Duração: {:.1} s", elapsed as f64 / 1000.0));
+            }
             ui.label("Antimalware: a lista contém deteções e avisos; os ficheiros sem alerta são contabilizados no resumo. Consulte o log .clamav.log junto ao relatório para os limites e erros do motor. Não há proteção em tempo real.");
         }
         if let Some(source) = &report.retry_of {
@@ -956,6 +986,50 @@ impl DesktopApp {
             });
     }
 
+    fn monitor_page(&mut self, ui: &mut egui::Ui) {
+        Self::title(
+            ui,
+            "Monitorização pós-alteração",
+            "Observação experimental de uma pasta enquanto esta aplicação está aberta.",
+        );
+        ui.label("Não bloqueia execução, não é um serviço e não oferece proteção em tempo real. Ao iniciar, analisa a pasta inteira; alterações são agrupadas com intervalo mínimo de 30 segundos. Eventos perdidos pedem nova análise integral. Sem exclusões automáticas por erro.");
+        if self.monitor.is_none()
+            && self.receiver.is_none()
+            && self.updater.is_none()
+            && ui
+                .button("Selecionar pasta e iniciar observação…")
+                .clicked()
+            && let Some(root) = rfd::FileDialog::new().pick_folder()
+        {
+            match antimalware::Engine::discover()
+                .and_then(|e| e.database_info())
+                .and_then(|_| monitor::Monitor::start(&root))
+            {
+                Ok(m) => {
+                    self.monitor = Some(m);
+                    self.monitor_notice.clear();
+                }
+                Err(e) => self.monitor_notice = e,
+            }
+        }
+        if let Some(m) = &self.monitor {
+            ui.label(format!("Pasta: {}", m.root.display()));
+            ui.label(&m.notice);
+            ui.label(format!("Lacunas/erros de observação nesta sessão: {}. A reanálise verifica o estado atual; não recupera ficheiros que já desapareceram.",m.gaps));
+            if ui
+                .button("Parar observação e pedir cancelamento da análise atual")
+                .clicked()
+            {
+                self.monitor = None;
+                self.cancel.store(true, Ordering::Relaxed);
+                self.monitor_notice =
+                    "Observação parada. Não são recebidas novas alterações.".into();
+            }
+        }
+        ui.label(&self.monitor_notice);
+        ui.label(format!("Último estado de análise: {}", self.status));
+    }
+
     fn settings(&mut self, ui: &mut egui::Ui) {
         Self::title(ui, "Definições", "Estado e limites da versão experimental.");
         ui.heading("Aparência");
@@ -986,7 +1060,7 @@ impl DesktopApp {
         ui.label("O histórico serve para diagnóstico; não altera permissões, exclusões ou regras automaticamente.");
         ui.add_space(16.0);
         ui.heading("Funcionalidades futuras");
-        ui.label("Proteção em tempo real, quarentena e atualização do aplicativo ainda não estão disponíveis. As bases oficiais ClamAV podem ser atualizadas manualmente em Analisar.");
+        ui.label("Proteção em tempo real e atualização do aplicativo ainda não estão disponíveis. Quarentena manual e observação de uma pasta estão disponíveis nas páginas próprias. As bases oficiais ClamAV podem ser atualizadas manualmente em Analisar.");
     }
 }
 
@@ -1000,6 +1074,40 @@ impl eframe::App for DesktopApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.update_scan_state();
+        let requested = self
+            .monitor
+            .as_mut()
+            .and_then(|m| m.poll().then(|| m.root.clone()));
+        if let Some(root) = requested
+            && self.receiver.is_none()
+            && self.updater.is_none()
+        {
+            if root.is_dir() {
+                if let Some(m) = &mut self.monitor {
+                    m.started_scan();
+                }
+                let page = self.page;
+                let selection = self.selection.clone();
+                let mode = self.mode;
+                let engine = self.use_clamav;
+                self.selection = Some(root);
+                self.mode = ScanMode::Folder;
+                self.use_clamav = true;
+                self.begin_scan();
+                self.page = page;
+                self.selection = selection;
+                self.mode = mode;
+                self.use_clamav = engine;
+            } else {
+                self.monitor = None;
+                self.monitor_notice =
+                    "Pasta indisponível; observação parada. Volte a selecionar a pasta.".into();
+            }
+        }
+        if self.monitor.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
+
         if let Some(receiver) = &self.updater {
             match receiver.try_recv() {
                 Ok(result) => {
@@ -1049,6 +1157,8 @@ impl eframe::App for DesktopApp {
                         Page::Scan => self.scan(ui),
                         Page::Results => self.results(ui),
                         Page::Settings => self.settings(ui),
+                        Page::Vault => self.vault.show(ui),
+                        Page::Monitor => self.monitor_page(ui),
                     }
                 })
             });
@@ -1233,7 +1343,14 @@ mod tests {
     fn all_pages_produce_layout_in_both_themes_at_supported_sizes() {
         for dark in [false, true] {
             for size in [[780.0, 540.0], [1100.0, 760.0], [1920.0, 1080.0]] {
-                for page in [Page::Home, Page::Scan, Page::Results, Page::Settings] {
+                for page in [
+                    Page::Home,
+                    Page::Scan,
+                    Page::Results,
+                    Page::Settings,
+                    Page::Vault,
+                    Page::Monitor,
+                ] {
                     let ctx = egui::Context::default();
                     apply_theme(&ctx, dark);
                     let mut app = DesktopApp {
@@ -1259,6 +1376,8 @@ mod tests {
                                     Page::Scan => app.scan(ui),
                                     Page::Results => app.results(ui),
                                     Page::Settings => app.settings(ui),
+                                    Page::Vault => app.vault.show(ui),
+                                    Page::Monitor => app.monitor_page(ui),
                                 });
                             });
                         },

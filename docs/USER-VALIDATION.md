@@ -1,3 +1,36 @@
+# Fecho de validação 0.5.0 — 20 de outubro de 2026
+
+Matriz completa de entregas e limites: [FIVE-MILESTONES.md](FIVE-MILESTONES.md).
+
+- Suite desktop final: **36 aprovados, 7 opcionais ignorados na passagem normal**.
+  Seis desses opcionais foram executados separadamente durante a implementação:
+  deteção positiva oficial, corpus benigno, base corrompida/cancelamento ativo,
+  limites/erro EICAR, atualização real por geração e reavaliação/restauração real.
+  O teste opcional de 50 129 ficheiros não foi repetido; o núcleo de enumeração
+  não foi alterado nesta entrega.
+- Núcleo/workspace: 24 testes anteriores aprovados; mais um novo teste Windows
+  de encerramento de processo por Job Object aprovado separadamente. JNI: 2 aprovados
+  no host. Não equivale a teste Android em dispositivo.
+- Formatação, Clippy com avisos tratados como erro e build release Windows aprovados.
+- Pacote experimental: instalação temporária e verificação do executável aprovadas;
+  reinstalação sobre versão existente recusada; conteúdo adulterado recusado antes
+  de criar destino; exigência Authenticode recusou corretamente o binário não assinado.
+- Quarentena: dados de teste inofensivos, nunca ficheiros pessoais; recuperação
+  após saída abrupta real, quota esgotada, corrupção e colisão de destino validadas.
+- GUI: testes egui sem janela para seis páginas e ambos os temas. Inspeção visual
+  interativa e DPI da nova interface continuam pendentes.
+- EICAR continua **não validado**, mesmo após nova tentativa. A amostra oficial
+  ClamAV foi efetivamente detetada e persistida; estas evidências são distintas.
+- Certificado de assinatura e ambiente isolado Windows para homologação não
+  disponíveis nesta sessão. Não foram usados certificados autossinados para
+  apresentar a aplicação como assinada por um editor confiável.
+
+Reprodução do pacote: `scripts/test-desktop-package.ps1 -Package dist/c2l-windows-0.5.0`.
+O teste conserva os seus artefactos numa pasta temporária própria e não altera
+instalações/relatórios existentes do utilizador.
+
+---
+
 # Validação da integração ClamAV — 19 de outubro de 2026
 
 Versão desktop 0.4.0. Motor ClamAV 1.5.4 instalado por utilizador; bases

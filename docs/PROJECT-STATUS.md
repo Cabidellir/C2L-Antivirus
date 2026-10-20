@@ -1,3 +1,13 @@
+# Estado 0.5.0 — cinco frentes implementadas, produção ainda pendente
+
+Ver [matriz dos cinco marcos](FIVE-MILESTONES.md) para entregas, testes e lacunas.
+Há deteção positiva real com fixture oficial, bases por gerações, quarentena
+manual recuperável, observação pós-alteração na GUI e empacotamento experimental.
+Serviço permanente, EICAR conclusivo, eficácia representativa e distribuição
+assinada não estão concluídos. O histórico abaixo não descreve a versão atual.
+
+---
+
 # Estado após integração desktop 0.4.0 — 19 de outubro de 2026
 
 Novo modo padrão: análise antimalware manual com ClamAV 1.5.4 e bases oficiais,

@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - "apps/c2l-desktop/**"
+      - "crates/c2l-platform-windows/**"
+      - "scripts/**"
+      - "docs/FIVE-MILESTONES.md"
       - "crates/c2l-scanner/**"
       - "crates/c2l-hashing/**"
       - "crates/c2l-indicators/**"
@@ -13,12 +16,20 @@ on:
   pull_request:
     paths:
       - "apps/c2l-desktop/**"
+      - "crates/c2l-platform-windows/**"
+      - "scripts/**"
+      - "docs/FIVE-MILESTONES.md"
       - "crates/c2l-scanner/**"
       - "crates/c2l-hashing/**"
       - "crates/c2l-indicators/**"
       - "crates/c2l-detection/**"
       - ".github/workflows/windows-desktop.yml"
   workflow_dispatch:
+    inputs:
+      engine_acceptance:
+        description: Run official ClamAV integration tests (downloads engine and signatures)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -54,10 +65,32 @@ jobs:
       - name: Build Windows application
         run: cargo build --manifest-path apps/c2l-desktop/Cargo.toml --release --locked
 
+      - name: Prepare optional real-engine acceptance
+        if: github.event_name == 'workflow_dispatch' && inputs.engine_acceptance
+        shell: pwsh
+        run: |
+          ./scripts/setup-clamav.ps1
+          ./scripts/prepare-clamav-test.ps1
+      - name: Real-engine acceptance
+        if: github.event_name == 'workflow_dispatch' && inputs.engine_acceptance
+        shell: pwsh
+        run: |
+          foreach ($test in @('real_official_positive_detection_and_report','real_benign_corpus_quality','real_corrupt_database_and_active_cancellation','real_restore_review')) {
+            cargo test --manifest-path apps/c2l-desktop/Cargo.toml --locked $test -- --ignored --nocapture
+            if ($LASTEXITCODE -ne 0) { throw "Acceptance failed: $test" }
+          }
+      - name: Package experimental desktop
+        shell: pwsh
+        run: ./scripts/package-desktop.ps1 -Executable apps/c2l-desktop/target/release/c2l-desktop.exe
+      - name: Validate per-user installation in temporary directory
+        shell: pwsh
+        run: ./scripts/test-desktop-package.ps1 -Package dist/c2l-windows-0.5.0
       - name: Upload unsigned Windows executable
         uses: actions/upload-artifact@v4
         with:
           name: c2l-antivirus-windows-prototype
-          path: apps/c2l-desktop/target/release/c2l-desktop.exe
+          path: |
+            apps/c2l-desktop/target/release/c2l-desktop.exe
+            dist/c2l-windows-0.5.0.zip
           if-no-files-found: error
           retention-days: 14
