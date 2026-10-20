@@ -20,6 +20,7 @@ const MAX_SCAN_FILES: usize = 50_000;
 const DEFAULT_SCAN_FILES: usize = 10_000;
 const RESULT_PAGE_SIZE: usize = 100;
 mod antimalware;
+mod background;
 mod diagnostics;
 mod history;
 mod monitor;
@@ -252,6 +253,7 @@ struct DesktopApp {
     vault: vault_ui::VaultUi,
     monitor: Option<monitor::Monitor>,
     monitor_notice: String,
+    service_panel: background::Panel,
     mode: ScanMode,
     use_clamav: bool,
     active_antimalware: bool,
@@ -282,6 +284,7 @@ impl Default for DesktopApp {
             vault: vault_ui::VaultUi::default(),
             monitor: None,
             monitor_notice: String::new(),
+            service_panel: background::Panel::default(),
             mode: ScanMode::File,
             use_clamav: true,
             active_antimalware: false,
@@ -507,7 +510,7 @@ impl DesktopApp {
                 .color(muted(ui)),
             );
             ui.label(
-                RichText::new("Sem proteção em tempo real")
+                RichText::new("Sem bloqueio pré-execução")
                     .small()
                     .color(warning(ui)),
             );
@@ -556,7 +559,7 @@ impl DesktopApp {
         Self::title(
             ui,
             "Visão geral",
-            "Um painel de análises manuais; ainda não existe monitorização do sistema.",
+            "Análises manuais e estado da observação contínua na página Monitorização.",
         );
         ui.horizontal_wrapped(|ui| {
             let report = self.last_report.as_ref();
@@ -590,7 +593,7 @@ impl DesktopApp {
                 PURPLE
             }),
         );
-        ui.label(RichText::new("Proteção em tempo real: não implementada").color(warning(ui)));
+        ui.label(RichText::new("Bloqueio pré-execução: não implementado. Serviço pós-alteração: consultar Monitorização.").color(warning(ui)));
         ui.label(
             RichText::new("Quarentena manual disponível; bloqueio não implementado")
                 .color(warning(ui)),
@@ -1004,9 +1007,20 @@ impl DesktopApp {
     fn monitor_page(&mut self, ui: &mut egui::Ui) {
         Self::title(
             ui,
-            "Monitorização pós-alteração",
-            "Observação experimental de uma pasta enquanto esta aplicação está aberta.",
+            "Monitorização",
+            "Estado do serviço Windows e observação local opcional.",
         );
+        if let Some(path) = self.service_panel.show(ui) {
+            match store::load(&path) {
+                Ok(scan) => {
+                    self.restore_report(path, scan);
+                    self.page = Page::Results;
+                }
+                Err(e) => self.monitor_notice = e,
+            }
+        }
+        ui.separator();
+        ui.heading("Observação local · apenas com esta janela aberta");
         ui.label("Não bloqueia execução, não é um serviço e não oferece proteção em tempo real. Ao iniciar, analisa a pasta inteira; alterações são agrupadas com intervalo mínimo de 30 segundos. Eventos perdidos pedem nova análise integral. Sem exclusões automáticas por erro.");
         if self.monitor.is_none()
             && self.receiver.is_none()
@@ -1075,7 +1089,7 @@ impl DesktopApp {
         ui.label("O histórico serve para diagnóstico; não altera permissões, exclusões ou regras automaticamente.");
         ui.add_space(16.0);
         ui.heading("Funcionalidades futuras");
-        ui.label("Proteção em tempo real e atualização do aplicativo ainda não estão disponíveis. Quarentena manual e observação de uma pasta estão disponíveis nas páginas próprias. As bases oficiais ClamAV podem ser atualizadas manualmente em Analisar.");
+        ui.label("Serviço Windows experimental disponível com instalação separada pelo administrador; veja Monitorização. Sem bloqueio pré-execução ou atualização automática do aplicativo. As bases do motor da GUI podem ser atualizadas em Analisar; o serviço usa um snapshot separado.");
     }
 }
 
@@ -1182,6 +1196,35 @@ impl eframe::App for DesktopApp {
 }
 
 fn main() -> eframe::Result {
+    let args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|a| a == "--service") {
+        if c2l_platform_windows::service_host::dispatch(background::service_main).is_err() {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if args.get(1).is_some_and(|a| a == "--service-worker") {
+        // Explicit bounded harness; never registers or claims to be an SCM service.
+        if args.len() != 5 {
+            std::process::exit(2);
+        }
+        let seconds = args[4].to_string_lossy().parse::<u64>().unwrap_or(0);
+        if !(1..=300).contains(&seconds) {
+            std::process::exit(2);
+        }
+        if background::run(
+            std::path::Path::new(&args[2]),
+            std::path::Path::new(&args[3]),
+            Arc::new(AtomicBool::new(false)),
+            Some(Duration::from_secs(seconds)),
+        )
+        .is_err()
+        {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("C2L Antivirus — Windows")

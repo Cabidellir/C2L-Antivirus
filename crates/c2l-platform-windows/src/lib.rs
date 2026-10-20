@@ -9,3 +9,6 @@ pub use vault_io::*;
 mod child_job;
 #[cfg(windows)]
 pub use child_job::ChildJob;
+
+#[cfg(windows)]
+pub mod service_host;

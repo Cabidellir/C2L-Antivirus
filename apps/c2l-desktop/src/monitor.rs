@@ -18,26 +18,35 @@ pub struct Monitor {
     dirty: bool,
     dirty_since: Instant,
     pub gaps: usize,
+    pub failed: bool,
     last_event: Instant,
     last_scan: Option<Instant>,
 }
 impl Monitor {
     pub fn start(root: &Path) -> Result<Self, String> {
+        let app = PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or("LOCALAPPDATA ausente")?)
+            .join("C2L-Antivirus");
+        Self::start_excluding(root, &[app])
+    }
+    pub fn start_excluding(root: &Path, excluded: &[PathBuf]) -> Result<Self, String> {
         let root = std::path::absolute(root).map_err(|e| e.to_string())?;
         let _guards =
             c2l_platform_windows::lock_parents(&root.join("probe")).map_err(|e| e.to_string())?;
         if !root.is_dir() {
             return Err("Selecione uma pasta existente".into());
         }
-        let app = PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or("LOCALAPPDATA ausente")?)
-            .join("C2L-Antivirus");
-        let a = app.to_string_lossy().to_lowercase();
         let b = root
             .to_string_lossy()
             .trim_end_matches(['\\', '/'])
             .to_lowercase();
-        if a == b || a.starts_with(&(b.clone() + "\\")) || b.starts_with(&(a + "\\")) {
-            return Err("Escolha uma pasta dedicada fora dos dados C2L, por exemplo Downloads. Não monitorize o disco inteiro.".into());
+        for path in excluded {
+            let a = path
+                .to_string_lossy()
+                .trim_end_matches(['\\', '/'])
+                .to_lowercase();
+            if a == b || a.starts_with(&(b.clone() + "\\")) || b.starts_with(&(a + "\\")) {
+                return Err("A pasta observada não pode conter dados ou executáveis C2L, nem estar dentro deles.".into());
+            }
         }
         let (sender, events) = mpsc::sync_channel(1024);
         let overflow = Arc::new(AtomicBool::new(false));
@@ -60,6 +69,7 @@ impl Monitor {
             dirty: true,
             dirty_since: Instant::now(),
             gaps: 0,
+            failed: false,
             last_event: Instant::now(),
             last_scan: None,
         })
@@ -97,6 +107,7 @@ impl Monitor {
                     .into();
                 }
                 Err(e) => {
+                    self.failed = true;
                     self.gaps += 1;
                     if !self.dirty {
                         self.dirty_since = Instant::now();
@@ -115,6 +126,15 @@ impl Monitor {
             && self
                 .last_scan
                 .is_none_or(|t| t.elapsed() >= Duration::from_secs(30))
+    }
+    pub fn has_pending(&self) -> bool {
+        self.dirty
+    }
+    pub fn request_rescan(&mut self) {
+        if !self.dirty {
+            self.dirty_since = Instant::now();
+        }
+        self.dirty = true;
     }
     pub fn started_scan(&mut self) {
         self.dirty = false;

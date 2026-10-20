@@ -2,7 +2,7 @@
 param([Parameter(Mandatory=$true)][string]$Executable, [switch]$RequireSigned)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$version = '0.5.2'
+$version = '0.6.0'
 $source = (Resolve-Path -LiteralPath $Executable).Path
 $signature = (Get-AuthenticodeSignature -LiteralPath $source).Status.ToString()
 if ($RequireSigned -and $signature -ne 'Valid') { throw 'Production package rejected: trusted Authenticode signature required.' }
@@ -11,8 +11,10 @@ if (Test-Path -LiteralPath $output) { throw 'Package directory exists; refusing 
 New-Item -ItemType Directory -Path (Join-Path $output 'scripts') -Force | Out-Null
 Copy-Item -LiteralPath $source -Destination (Join-Path $output 'c2l-desktop.exe')
 Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination $output
-Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\FIVE-MILESTONES.md') -Destination (Join-Path $output 'README.md')
-foreach ($name in @('setup-clamav.ps1','install-desktop.ps1')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $output 'scripts') }
+Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\WINDOWS-SERVICE.md') -Destination $output
+Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\WINDOWS-SERVICE.md') -Destination (Join-Path $output 'README.md')
+Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\FIVE-MILESTONES.md') -Destination $output
+foreach ($name in @('setup-clamav.ps1','install-desktop.ps1','install-monitor-service.ps1','uninstall-monitor-service.ps1','test-monitor-service.ps1')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $output 'scripts') }
 $files = @(Get-ChildItem -LiteralPath $output -File -Recurse | ForEach-Object {
     @{ path = $_.FullName.Substring($output.Length + 1).Replace('\','/'); sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
 })
