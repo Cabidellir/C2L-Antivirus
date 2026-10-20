@@ -2,7 +2,7 @@
 param([Parameter(Mandatory=$true)][string]$Executable, [switch]$RequireSigned)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$version = '0.5.1'
+$version = '0.5.2'
 $source = (Resolve-Path -LiteralPath $Executable).Path
 $signature = (Get-AuthenticodeSignature -LiteralPath $source).Status.ToString()
 if ($RequireSigned -and $signature -ne 'Valid') { throw 'Production package rejected: trusted Authenticode signature required.' }
