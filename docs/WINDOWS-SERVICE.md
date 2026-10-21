@@ -1,4 +1,4 @@
-# Serviço Windows experimental — 0.6.0
+# Serviço Windows experimental — 0.6.1
 
 ## O que esta entrega faz
 
@@ -16,8 +16,10 @@ integral do computador nem integração com Windows Security Center. Nenhum fich
 
 - Uma pasta por instalação. Análise inicial, agrupamento de alterações, mínimo
   de 30 segundos entre inícios e reconciliação periódica a cada 15 minutos.
-  Cada análise percorre a pasta toda: apropriado apenas para pastas pequenas
-  nesta etapa. Não há garantia de latência de deteção.
+  Alterações de ficheiros são agrupadas em lotes deduplicados de até 128 caminhos,
+  com limite adicional do tamanho da linha de comando. Pastas, remoções, eventos
+  ambíguos, perdas ou lotes acima do limite exigem reconciliação integral.
+  Não há garantia de latência de deteção.
 - Fila de eventos limitada a 1024. Overflow obriga a nova análise integral;
   falha do observador termina com erro, permitindo recuperação pelo SCM.
 - Leituras negadas, ficheiros demasiado grandes, conteúdo cifrado e falhas do
@@ -149,3 +151,22 @@ ACLs dos filhos e reposição das permissões originais, tanto com herança prot
 como não protegida. A comparação inclui todos os bytes das ACEs ordenadas,
 proprietário, grupo e proteção de herança; o indicador AUTO_INHERITED normalizado
 pelo Windows não é confundido com uma alteração das permissões.
+
+## Análise incremental — 0.6.1
+
+O serviço analisa os caminhos alterados num único processo do motor e conserva
+eventos recebidos durante a análise para o lote seguinte. O arranque e a
+reconciliação periódica continuam integrais. Falhas persistentes de leitura ou
+limites aguardam a reconciliação periódica, em vez de repetir imediatamente
+toda a pasta. Um lote limpo não apaga uma lacuna de cobertura anterior.
+Os relatórios incrementais usam o modo `clamav-changes`; o alvo é a pasta
+autorizada, mas a contagem refere-se apenas ao lote. A monitorização da GUI
+continua a usar análises integrais nesta versão.
+
+Validação 0.6.1: 40 testes passaram e oito integrações ficaram opt-in. A integração
+real executada separadamente confirmou uma única amostra nova analisada no lote
+incremental, deteção persistida, reinício com histórico e cancelamento ativo.
+Clippy com avisos como erros e build release passaram. A atualização local do
+serviço preservou ACLs, configuração, relatórios e o executável anterior; o hash
+instalado corresponde ao pacote e o heartbeat foi confirmado após reiniciar.
+A análise integral inicial após essa atualização ainda estava em curso na verificação.

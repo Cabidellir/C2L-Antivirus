@@ -1,6 +1,7 @@
 //! Opt-in post-change observation while the GUI is alive. No pre-execution blocking.
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::{
+    collections::BTreeSet,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -9,7 +10,57 @@ use std::{
     },
     time::{Duration, Instant},
 };
+#[derive(Default)]
+struct Pending {
+    full: bool,
+    paths: BTreeSet<PathBuf>,
+}
+impl Pending {
+    fn full(&mut self) {
+        self.full = true;
+        self.paths.clear();
+    }
+    fn event(&mut self, root: &Path, e: &notify::Event) {
+        if self.full {
+            return;
+        }
+        if e.need_rescan()
+            || e.paths.is_empty()
+            || !matches!(
+                e.kind,
+                notify::EventKind::Create(_) | notify::EventKind::Modify(_)
+            )
+        {
+            self.full();
+            return;
+        }
+        for path in &e.paths {
+            if !path.starts_with(root)
+                || path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+                || !path.is_file()
+            {
+                self.full();
+                return;
+            }
+            self.paths.insert(path.clone());
+        }
+        // Keep the Windows command line and memory bounded.
+        if self.paths.len() > 128
+            || self
+                .paths
+                .iter()
+                .map(|p| p.as_os_str().len() + 3)
+                .sum::<usize>()
+                > 12000
+        {
+            self.full();
+        }
+    }
+}
 pub struct Monitor {
+    pending: Pending,
     _watcher: RecommendedWatcher,
     events: Receiver<notify::Result<notify::Event>>,
     overflow: Arc<AtomicBool>,
@@ -61,6 +112,10 @@ impl Monitor {
             .watch(&root, RecursiveMode::Recursive)
             .map_err(|e| e.to_string())?;
         Ok(Self {
+            pending: Pending {
+                full: true,
+                paths: BTreeSet::new(),
+            },
             _watcher: watcher,
             events,
             overflow,
@@ -77,6 +132,7 @@ impl Monitor {
     pub fn poll(&mut self) -> bool {
         if self.overflow.swap(false, Ordering::Relaxed) {
             self.gaps += 1;
+            self.pending.full();
             if !self.dirty {
                 self.dirty_since = Instant::now();
             }
@@ -91,6 +147,7 @@ impl Monitor {
             };
             match event {
                 Ok(e) if !matches!(e.kind, notify::EventKind::Access(_)) => {
+                    self.pending.event(&self.root, &e);
                     if !self.dirty {
                         self.dirty_since = Instant::now();
                     }
@@ -131,12 +188,24 @@ impl Monitor {
         self.dirty
     }
     pub fn request_rescan(&mut self) {
+        self.pending.full();
         if !self.dirty {
             self.dirty_since = Instant::now();
         }
         self.dirty = true;
     }
+    /// None denotes full reconciliation; Some contains the bounded changed paths.
+    pub fn take_targets(&mut self) -> Option<Vec<PathBuf>> {
+        let pending = std::mem::take(&mut self.pending);
+        self.started_scan();
+        if pending.full {
+            None
+        } else {
+            Some(pending.paths.into_iter().collect())
+        }
+    }
     pub fn started_scan(&mut self) {
+        self.pending = Pending::default();
         self.dirty = false;
         self.last_scan = Some(Instant::now());
         self.notice="Análise pós-alteração iniciada; consulte Resultados. Novas alterações ficam pendentes.".into();
@@ -145,6 +214,45 @@ impl Monitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn changed_paths_are_deduplicated_and_ambiguous_events_reconcile() {
+        let root = std::env::temp_dir().join(format!("c2l-pending-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("changed.txt");
+        std::fs::write(&file, b"benign").unwrap();
+        let event = notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::File))
+            .add_path(file.clone());
+        let mut pending = Pending::default();
+        pending.event(&root, &event);
+        pending.event(&root, &event);
+        assert!(!pending.full);
+        assert_eq!(pending.paths.len(), 1);
+        let taken = std::mem::take(&mut pending);
+        pending.event(&root, &event);
+        assert_eq!(
+            pending.paths, taken.paths,
+            "events during a scan remain pending"
+        );
+        pending.event(&root, &notify::Event::new(notify::EventKind::Any));
+        assert!(pending.full);
+        assert!(pending.paths.is_empty());
+        let mut pending = Pending::default();
+        pending.event(
+            &root,
+            &notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::Folder))
+                .add_path(root.clone()),
+        );
+        assert!(pending.full);
+        let mut pending = Pending::default();
+        pending.event(
+            &root,
+            &notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
+                .add_path(root.join("../outside")),
+        );
+        assert!(pending.full);
+        assert_eq!(root.parent(), Some(std::env::temp_dir().as_path()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn native_event_and_overflow_require_rescan() {
         let root = std::env::temp_dir().join(format!("c2l-watch-{}", std::process::id()));

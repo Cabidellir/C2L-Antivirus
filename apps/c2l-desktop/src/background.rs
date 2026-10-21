@@ -190,6 +190,8 @@ fn run_loop(
     let mut periodic = Instant::now();
     let mut task: Option<thread::JoinHandle<Result<(ScanBatch, PathBuf), String>>> = None;
     let mut last_good = false;
+    let mut full_scan = true;
+    let mut full_good = false;
     let result = (|| {
         while !stop.load(Ordering::Acquire) && duration.is_none_or(|d| start.elapsed() < d) {
             let due = watch.poll();
@@ -216,6 +218,10 @@ fn run_loop(
                             && !report.cancelled
                             && report.errors == 0
                             && !report.truncated;
+                        if full_scan || !last_good {
+                            full_good = last_good;
+                        }
+                        last_good &= full_good;
                         state.notice = report.failure.unwrap_or_else(|| {
                             format!(
                                 "Última análise: {} ficheiros; {} deteções; {} erros",
@@ -224,18 +230,30 @@ fn run_loop(
                                 report.errors
                             )
                         });
+                        if !full_scan {
+                            state.notice = format!(
+                                "Ficheiros alterados: {}{}",
+                                state.notice,
+                                if full_good {
+                                    ""
+                                } else {
+                                    " · cobertura anterior incompleta; aguarda reconciliação integral"
+                                }
+                            );
+                        }
                     }
                     Err(e) => {
+                        full_good = false;
                         last_good = false;
                         state.notice = e;
                     }
                 }
-                if !last_good {
-                    watch.request_rescan();
-                }
+                // Persistent read/size failures wait for periodic reconciliation.
+                // Immediate retries previously kept scanning the entire folder in a loop.
             }
             if task.is_none() && due {
-                watch.started_scan();
+                let changed = watch.take_targets();
+                full_scan = changed.is_none();
                 match within_budget(&reports)
                     .and_then(|_| signatures::read(&install.join("database")))
                 {
@@ -246,15 +264,20 @@ fn run_loop(
                         let output = reports.clone();
                         let cancel = stop.clone();
                         task = Some(thread::spawn(move || {
-                            antimalware::scan(&e, &root, &output, &cancel, &AtomicUsize::new(0))
+                            if let Some(paths) = changed {
+                                antimalware::scan_changed(&e, &root, &paths, &output, &cancel)
+                            } else {
+                                antimalware::scan(&e, &root, &output, &cancel, &AtomicUsize::new(0))
+                            }
                         }));
                         state.phase = "a analisar".into();
                     }
                     Err(e) => {
                         state.phase = "degradado".into();
+                        full_good = false;
                         state.notice = e;
                         last_good = false;
-                        watch.request_rescan();
+                        // Retry at the next periodic reconciliation or filesystem event.
                     }
                 }
             }
@@ -506,7 +529,14 @@ mod integration {
         let previous = read_status(&data).unwrap();
         assert_eq!(previous.phase, "parado");
         let saved = crate::store::load(previous.last_detection_report.as_ref().unwrap()).unwrap();
-        assert!(saved.report.unwrap().matched > 0);
+        assert_eq!(saved.mode, "clamav-changes");
+        let report = saved.report.unwrap();
+        assert!(report.matched > 0);
+        assert_eq!(
+            report.engine_scanned,
+            Some(1),
+            "unchanged clean file must not be rescanned"
+        );
         // Restart with the same state; initial reconciliation and historical detection survive.
         let stop = Arc::new(AtomicBool::new(false));
         let signal = stop.clone();
