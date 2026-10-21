@@ -114,12 +114,38 @@ oficial do fornecedor. A aceitação confirmou análise limpa, alteração poste
 deteção persistida, paragem, reinício com histórico e cancelamento ativo.
 São testes funcionais, não uma avaliação de eficácia comercial.
 
-O ambiente local não dispõe de token elevado: instalação SCM, ACLs efetivas sob
-LocalService, recuperação automática pelo SCM e arranque após reboot ficam
-**pendentes de aceitação num Windows elevado**. Não estão declarados aprovados.
+A aceitação elevada em 20/10/2026 confirmou instalação SCM sob LocalService,
+análise inicial limpa, deteção da fixture sem GUI, paragem, reinício e histórico.
+O serviço tem apenas leitura/execução nos binários e escrita nos próprios dados;
+a propriedade dos ficheiros instalados é do grupo Administradores.
+**Arranque após reboot continua pendente**; não foi reiniciado o computador.
 
 ## Próximas capacidades
 
-Validar SCM/UAC e reinício real; integrar atualização autenticada do snapshot;
+Validar arranque após reinício do Windows; integrar atualização autenticada do snapshot;
 substituir reanálise integral por fila de ficheiros com reconciliação; adicionar
 notificações por sessão; avaliar bloqueio pré-execução como projeto separado.
+
+## Ativação após aceitação
+
+`activate-monitor-service.ps1` executa a aceitação numa pasta dedicada, preserva
+os relatórios de teste num diretório separado e passa para `-WatchPath` apenas
+após sucesso. Aceita os mesmos caminhos de motor/base/fixture do teste e
+`-PythonExecutable` para indicar Python explicitamente. Não altera o executável.
+
+Se o perfil tiver ACL privada, pode ser necessário `-TraversalPaths` com o
+caminho exato do perfil. `grant-monitor-traversal.ps1` concede somente
+ReadAttributes/Traverse nesse antecessor, **sem herança, listagem ou leitura de
+conteúdo**. Recusa raízes de volume, UNC e caminhos fora dos antecessores do alvo.
+As regras são registadas para remoção por `uninstall-monitor-service.ps1
+-RemoveReadGrant`. Nenhuma regra autoriza escrita na pasta observada.
+
+Em 22/10/2026, a instalação em Downloads mantinha SCM Running, heartbeat recente
+e 231 análises concluídas. O relatório inspecionado apresentava limites de tamanho
+e tempo, arquivo cifrado e falha de leitura, sem deteções classificadas pelo
+adaptador. Isto confirma funcionamento contínuo, mas cobertura incompleta.
+O teste `test-directory-dacl.ps1` confirmou concessão sem herança, preservação das
+ACLs dos filhos e reposição das permissões originais, tanto com herança protegida
+como não protegida. A comparação inclui todos os bytes das ACEs ordenadas,
+proprietário, grupo e proteção de herança; o indicador AUTO_INHERITED normalizado
+pelo Windows não é confundido com uma alteração das permissões.

@@ -1,16 +1,16 @@
 ﻿# Elevated acceptance for a disposable Windows machine. Never runs malware.
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][string]$Executable,[Parameter(Mandatory=$true)][string]$Database,[Parameter(Mandatory=$true)][string]$EngineArchive,[Parameter(Mandatory=$true)][string]$Fixture)
+param([Parameter(Mandatory=$true)][string]$Executable,[Parameter(Mandatory=$true)][string]$Database,[Parameter(Mandatory=$true)][string]$EngineArchive,[Parameter(Mandatory=$true)][string]$Fixture,[string]$PythonExecutable="python",[switch]$KeepInstalled)
 $ErrorActionPreference='Stop'
 if (Get-Service C2LMonitor -ErrorAction SilentlyContinue) {throw 'Existing service; acceptance refused.'}
-Get-Command python -ErrorAction Stop | Out-Null
+Get-Command $PythonExecutable -ErrorAction Stop | Out-Null
 $watch=Join-Path $env:PUBLIC ('C2L-Service-Test-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $watch | Out-Null
 Set-Content -LiteralPath (Join-Path $watch 'clean.txt') -Value 'Benign C2L service acceptance'
 if ((Get-FileHash -LiteralPath $Fixture -Algorithm SHA256).Hash.ToLowerInvariant() -ne '71e7b604d18aefd839e51a39c88df8383bb4c071dc31f87f00a2b5df580d4495') {throw 'Only the pinned harmless official fixture is accepted.'}
 function Read-State {
     $db=Join-Path $env:ProgramData 'C2L-Monitor\status.sqlite'
-    $json=& python -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute(sys.argv[2]).fetchone()[0])' $db 'SELECT json FROM status WHERE id=1'
+    $json=& $PythonExecutable -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute(sys.argv[2]).fetchone()[0])' $db 'SELECT json FROM status WHERE id=1'
     if ($LASTEXITCODE -ne 0) {throw 'Status read failed'}
     return ($json | ConvertFrom-Json)
 }
@@ -36,6 +36,6 @@ try {
     $restarted=Wait-State {param($s) $s.scans -gt $detected.scans -and $s.detections -ge $detected.detections}
     Write-Output "PASS: SCM startup, LocalService, change detection without GUI, stop, restart, persistent history. Watch=$watch"
 } finally {
-    & (Join-Path $PSScriptRoot 'uninstall-monitor-service.ps1') -RemoveReadGrant
+    if (-not $KeepInstalled) { & (Join-Path $PSScriptRoot 'uninstall-monitor-service.ps1') -RemoveReadGrant }
 }
 Write-Output 'Test reports and files retained. Reboot acceptance must be performed separately.'
