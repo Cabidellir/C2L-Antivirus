@@ -24,8 +24,10 @@ mod background;
 mod diagnostics;
 mod history;
 mod monitor;
+mod notifications;
 mod quarantine;
 mod retry;
+mod service_updates;
 mod signatures;
 mod store;
 mod theme;
@@ -1197,6 +1199,15 @@ impl eframe::App for DesktopApp {
 
 fn main() -> eframe::Result {
     let args: Vec<_> = std::env::args_os().collect();
+    if args
+        .get(1)
+        .is_some_and(|a| a == "--notification-agent" || a == "--notification-test")
+    {
+        if notifications::run(args[1] == "--notification-test").is_err() {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if args.get(1).is_some_and(|a| a == "--service") {
         if c2l_platform_windows::service_host::dispatch(background::service_main).is_err() {
             std::process::exit(1);

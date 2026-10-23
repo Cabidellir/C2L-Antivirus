@@ -12,3 +12,6 @@ pub use child_job::ChildJob;
 
 #[cfg(windows)]
 pub mod service_host;
+
+#[cfg(windows)]
+pub mod notification;

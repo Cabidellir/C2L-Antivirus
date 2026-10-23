@@ -104,10 +104,12 @@ Consulte o [Documento 01](docs/01-visao-e-objetivos.md) para a visão completa.
 **C2L Antivirus**  
 *Custom to Line. Security by Design.*
 
-### Serviço Windows experimental — desktop 0.6.0
+### Serviço Windows experimental — desktop 0.7.0
 
 Entrada SCM separada, worker de análise pós-alteração e painel de estado.
 Instalação requer administrador e pasta explicitamente configurada.
 Consulte [instalação, validação e limites](docs/WINDOWS-SERVICE.md).
-A execução real sob SCM/UAC e após reboot ainda precisa de aceitação elevada;
-não há bloqueio pré-execução nem quarentena automática.
+A instalação SCM/LocalService foi validada. A versão 0.7.0 acrescenta atualização
+automática autenticada das bases e agente de notificações por utilizador. Arranque
+após reboot/logon continua pendente de validação; não há bloqueio pré-execução
+nem quarentena automática.

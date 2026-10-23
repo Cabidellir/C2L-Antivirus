@@ -6,6 +6,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     process::Stdio,
+    sync::atomic::{AtomicBool, Ordering},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -95,7 +96,10 @@ pub fn active(root: &Path) -> Result<PathBuf> {
         _ => Err("Referência de base inválida".into()),
     }
 }
-fn run(command: &mut std::process::Command, timeout: Duration) -> Result<()> {
+fn run(command: &mut std::process::Command, timeout: Duration, cancel: &AtomicBool) -> Result<()> {
+    if cancel.load(Ordering::Acquire) {
+        return Err("Operação cancelada; base anterior preservada".into());
+    }
     let mut child = command
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -119,7 +123,7 @@ fn run(command: &mut std::process::Command, timeout: Duration) -> Result<()> {
             }
             _ => {}
         }
-        if start.elapsed() > timeout {
+        if cancel.load(Ordering::Acquire) || start.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait();
             return Err("Tempo limite; base anterior preservada".into());
@@ -131,10 +135,24 @@ fn publish(db: &Connection, name: &str, new: u64, previous: u64) -> Result<()> {
     if new < previous {
         return Err("Downgrade de base rejeitado".into());
     }
-    db.execute("INSERT INTO active VALUES(1,?1,?2) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,version=excluded.version",params![name,new as i64]).map_err(err)?;
-    Ok(())
+    db.execute_batch("CREATE TABLE IF NOT EXISTS previous(id INTEGER PRIMARY KEY CHECK(id=1), generation TEXT NOT NULL); BEGIN IMMEDIATE;").map_err(err)?;
+    let result = (|| {
+        db.execute("INSERT INTO previous SELECT 1,generation FROM active WHERE id=1 ON CONFLICT(id) DO UPDATE SET generation=excluded.generation", []).map_err(err)?;
+        db.execute("INSERT INTO active VALUES(1,?1,?2) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,version=excluded.version",params![name,new as i64]).map_err(err)?;
+        db.execute_batch("COMMIT").map_err(err)
+    })();
+    if result.is_err() {
+        let _ = db.execute_batch("ROLLBACK");
+    }
+    result
 }
 pub fn update(engine: &Engine) -> Result<String> {
+    update_cancellable(engine, &AtomicBool::new(false))
+}
+pub fn update_cancellable(engine: &Engine, cancel: &AtomicBool) -> Result<String> {
+    if cancel.load(Ordering::Acquire) {
+        return Err("Atualização cancelada; base anterior preservada".into());
+    }
     let lock = OpenOptions::new()
         .read(true)
         .write(true)
@@ -152,7 +170,7 @@ pub fn update(engine: &Engine) -> Result<String> {
         .optional()
         .map_err(err)?
         .unwrap_or(0) as u64;
-    let previous = previous.max(read(&active(&engine.root)?).map(|i| i.version).unwrap_or(0));
+    let previous = previous.max(read(&engine.database).map(|i| i.version).unwrap_or(0));
     // Keep old snapshots to protect running scans. No hidden deletion/retention policy.
     let count = fs::read_dir(&engine.root)
         .map_err(err)?
@@ -172,7 +190,7 @@ pub fn update(engine: &Engine) -> Result<String> {
     );
     let staging = engine.root.join(&name);
     fs::create_dir(&staging).map_err(err)?;
-    let current = active(&engine.root)?;
+    let current = engine.database.clone();
     for base in [
         "main.cvd",
         "main.cld",
@@ -180,23 +198,33 @@ pub fn update(engine: &Engine) -> Result<String> {
         "daily.cld",
         "bytecode.cvd",
         "bytecode.cld",
+        "freshclam.dat",
     ] {
         let source = current.join(base);
         if source.is_file() {
             fs::copy(source, staging.join(base)).map_err(err)?;
         }
     }
+    // Keep CDN backoff state even after a rejected/failed generation.
+    let cooldown = engine.root.join("freshclam.dat");
+    if cooldown.is_file() {
+        fs::copy(&cooldown, staging.join("freshclam.dat")).map_err(err)?;
+    }
     let config = staging.join("freshclam.conf");
     fs::write(&config,format!("DatabaseDirectory \"{}\"\nDatabaseMirror database.clamav.net\nTestDatabases yes\nConnectTimeout 15\nReceiveTimeout 60\n",staging.display())).map_err(err)?;
     let log = staging.join("update.log");
-    run(
+    let downloaded = run(
         hidden_command(&engine.bin.join("freshclam.exe"))
             .arg(format!("--config-file={}", config.display()))
             .arg("--quiet")
             .arg(format!("--log={}", log.display())),
         Duration::from_secs(600),
-    )
-    .map_err(|e| format!("{e}; última base mantida. Log: {}", log.display()))?;
+        cancel,
+    );
+    if staging.join("freshclam.dat").is_file() {
+        fs::copy(staging.join("freshclam.dat"), &cooldown).map_err(err)?;
+    }
+    downloaded.map_err(|e| format!("{e}; última base mantida. Log: {}", log.display()))?;
     let info = read(&staging)?;
     if now().saturating_sub(info.built) > 7 * 86400 {
         return Err("Atualização continua com mais de 7 dias; não publicada".into());
@@ -210,6 +238,7 @@ pub fn update(engine: &Engine) -> Result<String> {
             .arg("--")
             .arg(&probe),
         Duration::from_secs(180),
+        cancel,
     )?;
     // Ensure database bytes are flushed before the transactional pointer switch.
     for entry in fs::read_dir(&staging).map_err(err)? {
@@ -223,6 +252,9 @@ pub fn update(engine: &Engine) -> Result<String> {
                 .map_err(err)?;
         }
     }
+    if cancel.load(Ordering::Acquire) {
+        return Err("Atualização cancelada; base anterior preservada".into());
+    }
     publish(&db, &name, info.version, previous)?;
     Ok(format!(
         "Atualização validada e publicada. {}",
@@ -232,6 +264,57 @@ pub fn update(engine: &Engine) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cancelled_update_does_not_touch_disk_or_launch_network() {
+        let engine = Engine {
+            root: PathBuf::from("unused"),
+            bin: PathBuf::from("unused"),
+            database: PathBuf::from("unused"),
+        };
+        assert!(
+            update_cancellable(&engine, &AtomicBool::new(true))
+                .unwrap_err()
+                .contains("cancelada")
+        );
+    }
+    #[test]
+    #[ignore = "Downloads official signatures in an isolated root; checks failed validation preserves active snapshot"]
+    fn real_isolated_update_and_rejected_corrupt_candidate() {
+        let source = Engine::discover().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("c2l-update-{}-{}", std::process::id(), now()));
+        fs::create_dir(&root).unwrap();
+        let engine = Engine {
+            root: root.clone(),
+            bin: source.bin,
+            database: source.database,
+        };
+        let result = update(&engine).unwrap();
+        let current = active(&root).unwrap();
+        assert!(current.is_dir());
+        assert!(read(&current).unwrap().version >= read(&engine.database).unwrap().version);
+        let corrupt = root.join("invalid");
+        fs::create_dir(&corrupt).unwrap();
+        fs::write(corrupt.join("daily.cvd"), b"invalid database signature").unwrap();
+        let probe = root.join("clean.txt");
+        fs::write(&probe, b"benign").unwrap();
+        assert!(
+            run(
+                hidden_command(&engine.bin.join("clamscan.exe"))
+                    .arg("--official-db-only=yes")
+                    .arg(format!("--database={}", corrupt.display()))
+                    .arg("--")
+                    .arg(probe),
+                Duration::from_secs(60),
+                &AtomicBool::new(false)
+            )
+            .is_err()
+        );
+        assert_eq!(active(&root).unwrap(), current);
+        println!("{result}; corrupt candidate rejected, active snapshot unchanged");
+        assert_eq!(root.parent(), Some(std::env::temp_dir().as_path()));
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     #[ignore = "Downloads official signature updates and validates a new generation"]
     fn real_update_publishes_valid_snapshot() {

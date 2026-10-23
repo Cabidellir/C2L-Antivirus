@@ -1,10 +1,5 @@
 //! Continuous post-change worker. No file removal, command IPC or execution blocking.
-use crate::{
-    ScanBatch,
-    antimalware::{self, Engine},
-    monitor::Monitor,
-    signatures,
-};
+use crate::{ScanBatch, antimalware, monitor::Monitor, service_updates, signatures};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -22,10 +17,21 @@ use std::{
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub watch_root: PathBuf,
+    #[serde(default = "enabled")]
+    pub automatic_updates: bool,
+}
+fn enabled() -> bool {
+    true
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Status {
     pub heartbeat: u64,
+    #[serde(default)]
+    pub update_next: u64,
+    #[serde(default)]
+    pub update_success: u64,
+    #[serde(default)]
+    pub update_notice: String,
     pub phase: String,
     pub notice: String,
     pub root: PathBuf,
@@ -125,13 +131,6 @@ fn within_budget(dir: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-fn engine(install: &Path) -> Engine {
-    Engine {
-        bin: install.join("engine"),
-        root: install.into(),
-        database: install.join("database"),
-    }
-}
 pub fn service_main(stop: Arc<AtomicBool>) -> Result<(), String> {
     let install = std::env::current_exe()
         .map_err(error)?
@@ -192,6 +191,8 @@ fn run_loop(
     let mut last_good = false;
     let mut full_scan = true;
     let mut full_good = false;
+    let mut initial_attempted = false;
+    let mut updater: Option<thread::JoinHandle<Result<String, String>>> = None;
     let result = (|| {
         while !stop.load(Ordering::Acquire) && duration.is_none_or(|d| start.elapsed() < d) {
             let due = watch.poll();
@@ -251,15 +252,55 @@ fn run_loop(
                 // Persistent read/size failures wait for periodic reconciliation.
                 // Immediate retries previously kept scanning the entire folder in a loop.
             }
-            if task.is_none() && due {
+            if updater.as_ref().is_some_and(|t| t.is_finished()) {
+                match updater
+                    .take()
+                    .unwrap()
+                    .join()
+                    .map_err(|_| "Atualizador terminou inesperadamente")?
+                {
+                    Ok(message) => {
+                        state.update_success = signatures::now();
+                        state.update_notice = message;
+                        watch.request_rescan();
+                    }
+                    Err(message) => {
+                        state.update_notice =
+                            format!("Falha na atualização; base anterior mantida: {message}");
+                    }
+                }
+            }
+            if config.automatic_updates
+                && updater.is_none()
+                && task.is_none()
+                && initial_attempted
+                && signatures::now() >= state.update_next
+            {
+                // Persist before spawning: restarts cannot bypass the six-hour schedule.
+                state.update_next = signatures::now().saturating_add(6 * 3600);
+                state.update_notice =
+                    "Atualização em curso; base anterior preservada até validação".into();
+                publish(db, state)?;
+                let i = install.to_path_buf();
+                let d = data.to_path_buf();
+                let cancel = stop.clone();
+                updater = Some(thread::spawn(move || {
+                    service_updates::update(&i, &d, &cancel)
+                }));
+            }
+            if updater.is_some() {
+                state.phase = "a atualizar bases".into();
+            }
+            if task.is_none() && updater.is_none() && due {
+                initial_attempted = true;
                 let changed = watch.take_targets();
                 full_scan = changed.is_none();
                 match within_budget(&reports)
-                    .and_then(|_| signatures::read(&install.join("database")))
+                    .and_then(|_| service_updates::engine(install, data))
+                    .and_then(|e| signatures::read(&e.database).map(|info| (e, info)))
                 {
-                    Ok(info) => {
+                    Ok((e, info)) => {
                         state.database = info.label(signatures::now());
-                        let e = engine(install);
                         let root = config.watch_root.clone();
                         let output = reports.clone();
                         let cancel = stop.clone();
@@ -281,10 +322,12 @@ fn run_loop(
                     }
                 }
             }
-            if task.is_none() {
-                let stale = signatures::read(&install.join("database")).map_or(true, |i| {
-                    signatures::now().saturating_sub(i.built) > 7 * 86400
-                });
+            if task.is_none() && updater.is_none() {
+                let stale = service_updates::engine(install, data)
+                    .and_then(|e| signatures::read(&e.database))
+                    .map_or(true, |i| {
+                        signatures::now().saturating_sub(i.built) > 7 * 86400
+                    });
                 state.phase = if !last_good || stale {
                     "degradado"
                 } else if watch.has_pending() {
@@ -294,7 +337,7 @@ fn run_loop(
                 }
                 .into();
                 if stale {
-                    state.database="Bases ausentes, inválidas ou com mais de sete dias; atualizar pelo administrador".into();
+                    state.database="Bases ausentes, inválidas ou com mais de sete dias; consulte o estado das atualizações".into();
                 }
             }
             if periodic.elapsed() > Duration::from_secs(900) {
@@ -320,6 +363,9 @@ fn run_loop(
     stop.store(true, Ordering::Release);
     if let Some(task) = task {
         let _ = task.join();
+    }
+    if let Some(updater) = updater {
+        let _ = updater.join();
     }
     result
 }
@@ -410,6 +456,13 @@ impl Panel {
                 ui.label(format!("Pasta configurada: {}", s.root.display()));
                 ui.label(&s.notice);
                 ui.label(&s.database);
+                ui.label(&s.update_notice);
+                if s.update_success > 0 {
+                    ui.label(format!(
+                        "Última atualização validada há {} minutos",
+                        signatures::now().saturating_sub(s.update_success) / 60
+                    ));
+                }
                 ui.label(format!("Histórico do serviço: {} análises · {} deteções · {} erros na última análise · {} lacunas de eventos",s.scans,s.detections,s.errors,s.gaps));
                 if s.detections > 0 {
                     ui.colored_label(crate::theme::danger(ui),"Há deteções nos relatórios do serviço. Reveja-as antes de decidir a quarentena.");
@@ -431,8 +484,8 @@ impl Panel {
         }
         ui.collapsing("Instalação e limites",|ui|{
             ui.label("Instalação pelo administrador com scripts/install-monitor-service.ps1: indicar executável, pasta observada e base oficial. UAC é necessário apenas na instalação/gestão do serviço.");
-            ui.label("Conta LocalService, leitura apenas na pasta autorizada. Uma pasta por instalação; análise inicial, após alterações (mínimo 30 s) e reconciliação a cada 15 min. Bases do serviço são uma cópia separada, atualizada pelo administrador.");
-            ui.label("Deteções e erros ficam guardados mesmo com a GUI fechada. Nesta versão, os avisos são apresentados ao abrir este painel; ainda não há notificações do Windows em segundo plano.");
+            ui.label("Conta LocalService, leitura apenas na pasta autorizada. Uma pasta por instalação; análise inicial, após alterações (mínimo 30 s) e reconciliação a cada 15 min. Bases oficiais atualizadas automaticamente a cada seis horas, com validação e conservação da geração anterior.");
+            ui.label("Deteções e erros ficam guardados mesmo com a GUI fechada. O agente de notificações do utilizador pode avisar com esta janela fechada. Requer sessão iniciada e ativação por scripts/install-notifications.ps1; o Windows pode silenciar os avisos.");
         });
         None
     }
@@ -440,6 +493,7 @@ impl Panel {
 #[cfg(test)]
 mod integration {
     use super::*;
+    use crate::antimalware::Engine;
     #[test]
     #[ignore = "Requires installed official ClamAV and harmless vendor fixture; tests the worker, not SCM/UAC"]
     fn real_continuous_worker_detects_changes_and_recovers_history() {
@@ -490,6 +544,7 @@ mod integration {
             install.join("service.json"),
             serde_json::to_vec(&Config {
                 watch_root: watch.clone(),
+                automatic_updates: false,
             })
             .unwrap(),
         )
@@ -586,7 +641,11 @@ mod integration {
         ] {
             fs::write(
                 root.join("service.json"),
-                serde_json::to_vec(&Config { watch_root: path }).unwrap(),
+                serde_json::to_vec(&Config {
+                    watch_root: path,
+                    automatic_updates: false,
+                })
+                .unwrap(),
             )
             .unwrap();
             assert!(load_config(&root, &root).is_err());

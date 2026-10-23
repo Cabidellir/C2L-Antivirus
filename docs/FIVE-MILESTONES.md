@@ -48,7 +48,7 @@ rejeição de downgrade e de cabeçalhos/datas inválidos em testes. Uma falha r
 de sincronização em disco durante desenvolvimento preservou a base anterior;
 o problema foi corrigido e a atualização repetida com sucesso.
 
-**Limites:** atualização manual; máximo de dez diretórios de geração, incluindo
+**Limites da atualização pela GUI:** atualização manual; máximo de dez diretórios de geração, incluindo
 tentativas falhadas, antes de solicitar manutenção. Sem limpeza automática,
 atualização automática do executável ClamAV ou política própria de revogação.
 Estado local não é resistente a adulteração pelo próprio utilizador/admin.
@@ -158,3 +158,7 @@ identificados por `real_`. Não executar malware real nem desativar outro antiv�
 - [Remoção pelo handle](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle)
 - [Eventos de diretório](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-readdirectorychangesw)
 - [Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)
+
+O serviço 0.7.0 acrescenta atualização automática com retenção própria e avisos
+por sessão. Ver [WINDOWS-SERVICE.md](WINDOWS-SERVICE.md) para instalação,
+validação e limites; o executável do motor continua sem atualização automática.

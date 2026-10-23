@@ -22,7 +22,7 @@ function Wait-State([scriptblock]$Predicate) {
     } while ([DateTime]::UtcNow -lt $deadline)
     throw 'Expected service state not observed within 120 seconds.'
 }
-& (Join-Path $PSScriptRoot 'install-monitor-service.ps1') -Executable $Executable -Database $Database -EngineArchive $EngineArchive -WatchPath $watch -GrantReadAccess
+& (Join-Path $PSScriptRoot 'install-monitor-service.ps1') -Executable $Executable -Database $Database -EngineArchive $EngineArchive -WatchPath $watch -GrantReadAccess -DisableAutomaticUpdates
 try {
     $initial=Wait-State {param($s) $s.scans -ge 1 -and $s.phase -eq 'a observar' -and $s.detections -eq 0}
     $service=Get-CimInstance Win32_Service -Filter "Name='C2LMonitor'"

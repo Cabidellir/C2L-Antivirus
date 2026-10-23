@@ -7,6 +7,7 @@ param(
     [Parameter(Mandatory=$true)][string]$Database,
     [string]$EngineArchive = (Join-Path $env:LOCALAPPDATA 'C2L-Antivirus\engine\clamav-1.5.4.win.x64.zip'),
     [switch]$GrantReadAccess,
+    [switch]$DisableAutomaticUpdates,
     [switch]$RequireSigned
 )
 $ErrorActionPreference='Stop'
@@ -77,7 +78,7 @@ foreach ($name in $databaseFiles) {
     $file=Assert-LocalPlainPath (Join-Path $databaseSource $name)
     Copy-Item -LiteralPath $file -Destination (Join-Path $install "database\$name")
 }
-@{watch_root=$watch} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $install 'service.json') -Encoding utf8
+@{watch_root=$watch; automatic_updates=(-not $DisableAutomaticUpdates)} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $install 'service.json') -Encoding utf8
 $credential=[pscredential]::new('NT AUTHORITY\LocalService',[Security.SecureString]::new())
 $binary='"'+(Join-Path $install 'c2l-desktop.exe')+'" --service'
 New-Service -Name C2LMonitor -DisplayName 'C2L — análise contínua experimental' -BinaryPathName $binary -StartupType Automatic -Credential $credential -Description 'Read-only post-change scanning of one configured folder. No pre-execution blocking.' | Out-Null
@@ -101,4 +102,4 @@ foreach ($path in @($install,$data)) {
     if ($LASTEXITCODE -ne 0) {throw 'Unable to protect ownership of service files.'}
 }
 Start-Service -Name C2LMonitor
-Write-Output "Installed. Check Monitorização in the GUI: SCM running alone does not prove healthy scanning. Target: $watch. No file write grants; no automatic quarantine. Signature snapshot must be refreshed by an administrator."
+Write-Output "Installed. Check Monitorização in the GUI: SCM running alone does not prove healthy scanning. Target: $watch. No file write grants; no automatic quarantine. Official signatures update automatically unless explicitly disabled."

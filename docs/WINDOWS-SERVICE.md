@@ -1,4 +1,4 @@
-# Serviço Windows experimental — 0.6.1
+# Serviço Windows experimental — 0.7.0
 
 ## O que esta entrega faz
 
@@ -24,17 +24,19 @@ integral do computador nem integração com Windows Security Center. Nenhum fich
   falha do observador termina com erro, permitindo recuperação pelo SCM.
 - Leituras negadas, ficheiros demasiado grandes, conteúdo cifrado e falhas do
   motor mantêm estado degradado; não geram exclusões automáticas.
-- Sem alertas toast com a GUI fechada. As deteções são persistidas e aparecem
-  no painel Monitorização, com acesso ao último relatório que teve deteções.
-- Snapshot separado das bases. Atualizar as bases na GUI não atualiza este
-  snapshot. Bases com mais de sete dias causam aviso/estado degradado.
+- Avisos pela área de notificações com a GUI fechada requerem agente por
+  utilizador, sessão iniciada e permissões de leitura dos dados do serviço.
+  O Windows pode silenciá-los; os relatórios continuam a ser a fonte de auditoria.
+- Bases do serviço separadas das bases da GUI. Atualização automática a cada
+  seis horas, após a primeira tentativa de análise. Bases com mais de sete
+  dias continuam a causar aviso/estado degradado.
 - Relatórios não são apagados automaticamente. Acima de 512 MiB já existentes
   ou 1500 entradas a próxima análise é suspensa. Uma análise em curso pode
   exceder esse limiar; aplicam-se também os limites do adaptador ClamAV.
 - Cancelamento do motor é cooperativo, com terminação do processo e Job Object.
   O subprocesso de identificação do motor tem timeout de dez segundos.
 - Não foram implementados minifilter, USN journal, autoproteção nem atualização
-  automática do serviço. Binário experimental ainda sem assinatura Authenticode.
+  automática do executável do serviço. Binário experimental ainda sem assinatura Authenticode.
 
 ## Instalar (administrador / UAC)
 
@@ -97,11 +99,10 @@ Start-Service C2LMonitor
 ```
 
 A remoção preserva binários, bases e relatórios. Não apagar diretórios do serviço
-manualmente enquanto estiver ativo. Antes de atualizar a base do serviço, parar
-o serviço, preservar a cópia anterior, copiar uma geração oficial completa para
-`database` mantendo as ACLs e reiniciar; confirmar a nova versão e uma análise
-concluída. Se falhar, restaurar a cópia anterior. A publicação automática e
-transacional de snapshots para o serviço é um marco seguinte.
+manualmente enquanto estiver ativo. As bases iniciais em Program Files são
+preservadas como recuperação. As atualizações automáticas usam gerações em
+ProgramData/C2L-Monitor/definitions, verificadas pelo motor oficial antes da
+publicação transacional. Não se concede escrita ao serviço em Program Files.
 
 ## Referências de implementação
 
@@ -124,9 +125,8 @@ a propriedade dos ficheiros instalados é do grupo Administradores.
 
 ## Próximas capacidades
 
-Validar arranque após reinício do Windows; integrar atualização autenticada do snapshot;
-substituir reanálise integral por fila de ficheiros com reconciliação; adicionar
-notificações por sessão; avaliar bloqueio pré-execução como projeto separado.
+Validar arranque após reinício do Windows e logon; ampliar testes de eficácia,
+latência e consumo; avaliar bloqueio pré-execução como projeto separado.
 
 ## Ativação após aceitação
 
@@ -152,7 +152,7 @@ como não protegida. A comparação inclui todos os bytes das ACEs ordenadas,
 proprietário, grupo e proteção de herança; o indicador AUTO_INHERITED normalizado
 pelo Windows não é confundido com uma alteração das permissões.
 
-## Análise incremental — 0.6.1
+## Análise incremental — 0.7.0
 
 O serviço analisa os caminhos alterados num único processo do motor e conserva
 eventos recebidos durante a análise para o lote seguinte. O arranque e a
@@ -170,3 +170,65 @@ Clippy com avisos como erros e build release passaram. A atualização local do
 serviço preservou ACLs, configuração, relatórios e o executável anterior; o hash
 instalado corresponde ao pacote e o heartbeat foi confirmado após reiniciar.
 A análise integral inicial após essa atualização ainda estava em curso na verificação.
+
+## Bases automáticas e notificações — 0.7.0
+
+`automatic_updates` é verdadeiro por omissão; o instalador aceita
+`-DisableAutomaticUpdates` para testes isolados. O prazo de seis horas é guardado
+antes de iniciar a atualização, impedindo ciclos de rede após reinícios. FreshClam
+preserva o estado de espera imposto pelo fornecedor. As bases oficiais são
+carregadas com `--official-db-only=yes` antes de publicar; versões diárias
+inferiores à atual são recusadas. Cancelamento, falha de rede ou validação mantêm
+a referência anterior. A publicação atual e anterior é transacional em SQLite.
+
+O serviço não analisa e atualiza em simultâneo. O heartbeat continua ativo e os
+eventos aguardam na fila limitada. O download tem limite de dez minutos e a
+validação três minutos; a paragem cancela os subprocessos. Após sucesso pede-se
+reconciliação integral. A retenção remove apenas gerações internas inativas,
+conservando a ativa, a anterior publicada e o snapshot instalado. Isto não apaga
+relatórios nem ficheiros do utilizador. Um candidato falhado é conservado até à
+próxima manutenção; os logs das gerações eliminadas não são um arquivo permanente.
+
+Ativar os avisos na sessão do utilizador, sem elevação:
+
+```powershell
+.\scripts\install-notifications.ps1
+# Desativar apenas os avisos; a análise continua:
+.\scripts\install-notifications.ps1 -Disable
+```
+
+O agente usa a API Windows Shell_NotifyIcon, consulta apenas o estado do serviço
+e guarda o cursor de avisos no perfil do utilizador. É iniciado agora e pelo HKCU
+Run no próximo logon. Um relatório só gera um aviso por perfil; novos relatórios
+são agrupados com intervalo mínimo de quinze minutos. Uma deteção repetida numa
+reanálise pode originar novo aviso após esse intervalo. Não são mostrados nomes
+de ficheiros no aviso. Não há garantia de apresentação, entrega ou leitura pelo
+utilizador; modo silencioso, políticas e sessão encerrada podem impedi-la. Abra
+Monitorização para os detalhes e recuperação manual. O ícone de área de notificação
+é informativo e não inicia quarentena nem comandos administrativos.
+
+`c2l-desktop.exe --notification-test` submete um aviso claramente identificado como
+teste inofensivo e termina após dez segundos. Executar antes de ativar o agente
+normal, porque o perfil permite apenas uma instância. A API aceitar o aviso não
+prova que foi visto. Não é um teste EICAR nem mede eficácia antivírus.
+
+Referências: [FreshClam](https://docs.clamav.net/manual/Usage/SignatureManagement.html),
+[notificações Windows](https://learn.microsoft.com/en-us/windows/win32/shell/notification-area).
+
+Validação 0.7.0 em 23/10/2026: 44 testes normais passaram; nove integrações são
+opt-in. Foram executadas separadamente a atualização real numa raiz isolada
+(base 28161, candidato corrompido recusado sem mudar a ativa) e a integração de
+análise incremental/deteção/reinício/cancelamento. Clippy, release e integridade
+do pacote passaram. A API Windows aceitou o aviso de teste; a apresentação visual
+não foi confirmada. O agente foi ativado no perfil do utilizador e configurado
+para logon. A substituição do serviço instalado ficou pendente porque o pedido
+UAC foi cancelado; isto não é uma validação sob LocalService da versão 0.7.0.
+
+`scripts/test-service-updates.ps1` executa um worker isolado com atualização
+automática real e verifica publicação, reconciliação posterior e ausência de
+atualizações duplicadas no intervalo. Preserva a pasta temporária para auditoria;
+não instala serviços nem altera a pasta observada pelo serviço em utilização.
+
+A aceitação automática isolada confirmou duas análises sem erros, publicação
+automática da base 28161 e análise posterior com essa base. A instalação
+LocalService existente continuou na 0.6.1 enquanto o UAC estava pendente/cancelado.
