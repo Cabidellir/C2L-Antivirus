@@ -232,3 +232,10 @@ não instala serviços nem altera a pasta observada pelo serviço em utilizaçã
 A aceitação automática isolada confirmou duas análises sem erros, publicação
 automática da base 28161 e análise posterior com essa base. A instalação
 LocalService existente continuou na 0.6.1 enquanto o UAC estava pendente/cancelado.
+
+Em nova tentativa autorizada em 23/10/2026, o UAC foi aceite e o serviço 0.7.0
+foi instalado com hash correspondente ao pacote, ACLs preservadas e cópia do
+executável anterior. Sob LocalService, a primeira atualização automática validou
+e publicou a base diária 28162 (cerca de duas horas de idade) e iniciou a
+reconciliação com a nova base. Heartbeat recente e agente de notificações ativo
+foram confirmados. Reboot/logon e apresentação visual do aviso continuam por validar.
